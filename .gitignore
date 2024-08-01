@@ -1,0 +1,15 @@
+# Ignore virtual environment directories
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Cache files
+__pycache__/
+
+# Ignore VSCode settings
+.vscode/
+
+# Additional custom directories or files can be added here, if it will be needed in future development.
