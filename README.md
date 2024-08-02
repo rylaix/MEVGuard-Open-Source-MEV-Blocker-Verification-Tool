@@ -20,7 +20,7 @@ The objective of this project is to develop a standalone service that confirms t
 
 ## Technologies Used
 
-- **Python**: The main programming language used for the project.
+- **Python**: The main programming language used for the project. (Python 3.10.10 used) 
 - **web3.py**: A Python library to interact with the Ethereum blockchain.
 - **Dune Analytics**: Used to query and analyze blockchain data.
 - **Docker**: Containerization for easy deployment (to be implemented in future milestones).
@@ -119,12 +119,3 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 - **Virtual Environment Issues**: Ensure the virtual environment is activated before installing dependencies or running scripts.
 - **API Key Errors**: Double-check that your API keys in the `.env` file are correct.
 - **Network Errors**: Ensure you have a stable internet connection and valid RPC node URL.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a pull request or open an issue if you have any suggestions or improvements.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-```
