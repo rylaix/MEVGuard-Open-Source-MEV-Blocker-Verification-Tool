@@ -6,8 +6,10 @@ ENV/
 env.bak/
 venv.bak/
 
-# Cache files
+# Cache files / Builds / DLL's
 __pycache__/
+*.pyd
+build/
 
 # Ignore VSCode settings
 .vscode/

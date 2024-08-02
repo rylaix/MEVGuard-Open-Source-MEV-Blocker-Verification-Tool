@@ -20,11 +20,13 @@ The objective of this project is to develop a standalone service that confirms t
 
 ## Technologies Used
 
-- **Python**: The main programming language used for the project. (Python 3.10.10 used) 
+- **Python**: The main programming language used for the project. (Python 3.10.10 used)
 - **web3.py**: A Python library to interact with the Ethereum blockchain.
 - **Dune Analytics**: Used to query and analyze blockchain data.
 - **Docker**: Containerization for easy deployment (to be implemented in future milestones).
 - **Telegram & Slack**: Used for alerts and logging (to be implemented in future milestones).
+- **C Extensions**: Used for optimizing mathematical computations. (basically a placeholder at this stage, included for future development)
+- **Multiprocessing**: Utilized to leverage CPU cores for parallel data processing.
 
 ## Setup and Installation
 
@@ -60,7 +62,21 @@ Install the necessary Python packages listed in the `requirements.txt` file:
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
+### 4. Compile C Extensions
+
+Compile the C extensions used for optimizing performance:
+
+```bash
+# Windows
+cd c_extension
+python setup.py build_ext --inplace
+
+# macOS/Linux
+cd c_extension
+python3 setup.py build_ext --inplace
+```
+
+### 5. Configure Environment Variables
 
 Create a `.env` file in the root directory with the following variables:
 
@@ -74,7 +90,7 @@ DUNE_QUERY_ID=your-dune-query-id
 - **DUNE_API_KEY**: API key for accessing Dune Analytics.
 - **DUNE_QUERY_ID**: The ID of the Dune query used to fetch MEV Blocker transactions.
 
-### 5. Configuration
+### 6. Configuration
 
 Additional configurations can be added in the `config/config.yaml` file if necessary.
 
@@ -89,6 +105,7 @@ python src/data_gathering.py
 This script will:
 - Fetch the latest block data using web3.py.
 - Execute a Dune Analytics query to identify potential MEV Blocker transactions.
+- Utilize multiprocessing to process data efficiently.
 - Store the fetched data in the `data/` directory as JSON files.
 
 ## File Structure
@@ -101,6 +118,10 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 ├── src/
 │   ├── data_gathering.py         # Script for data gathering
 │   ├── utils.py                  # Utility functions (logging, etc.)
+│
+├── c_extension/                  # Directory for C extension code
+│   ├── c_extension.c             # C extension for optimized calculations
+│   └── setup.py                  # Setup script for building C extensions
 │
 ├── data/                         # Directory where fetched data is stored
 │
@@ -119,3 +140,4 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 - **Virtual Environment Issues**: Ensure the virtual environment is activated before installing dependencies or running scripts.
 - **API Key Errors**: Double-check that your API keys in the `.env` file are correct.
 - **Network Errors**: Ensure you have a stable internet connection and valid RPC node URL.
+- **C Extension Compilation**: Ensure you have the necessary build tools installed for compiling C extensions.

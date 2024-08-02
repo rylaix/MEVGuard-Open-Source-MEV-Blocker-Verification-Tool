@@ -2,4 +2,4 @@ web3==5.31.3
 dune-client==1.7.2
 python-dotenv==1.0.0
 requests==2.31.0
-pyyaml==6 """Be sure to use version 6 or above to avoid compiling wheels manually, and face issues with it"""
+pyyaml==6 
