@@ -71,11 +71,8 @@ def identify_mev_blocker_bundles(block):
         params=[]
     )
 
-    # Execute the query
-    execution_id = dune_client.execute_query(query)
-
-    # Fetch the latest result from the executed query
-    result = dune_client.get_latest_result(query)
+    # Run the query and get the results
+    result = dune_client.run_query(query)
 
     # Ensure the results are retrieved as a list of dictionaries
     bundles = result.get_rows()
