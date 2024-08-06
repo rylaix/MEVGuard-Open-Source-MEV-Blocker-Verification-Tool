@@ -116,6 +116,7 @@ Below is the structure of the project directory:
 MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 │
 ├── src/
+│   ├── __init__.py               # Identification of folder so python can see it
 │   ├── data_gathering.py         # Script for data gathering
 │   ├── utils.py                  # Utility functions (logging, etc.)
 │
@@ -124,12 +125,14 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 │   └── setup.py                  # Setup script for building C extensions
 │
 ├── data/                         # Directory where fetched data is stored
+│   ├── __init__.py               # Identification of folder so python can see it
 │
 ├── config/
 │   └── config.yaml               # Configuration file
 │
 ├── .gitignore                    # Git ignore file
 ├── requirements.txt              # Python dependencies
+├── .env                          # Crucial to handle Keys 
 └── README.md                     # Project documentation
 ```
 
