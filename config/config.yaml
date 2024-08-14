@@ -1,4 +1,4 @@
 dune_query_id: 2446884
-polling_rate_minutes: 2 # Polling interval in minutes
+polling_rate_seconds: 10 # Polling interval in seconds.
 start_block_offset: 100  # Number of blocks back from the latest block to start fetching
 num_blocks_to_process: 5  # Number of blocks to process

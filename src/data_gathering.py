@@ -84,7 +84,7 @@ def execute_query_and_get_results(query_id):
         print(f"Query execution ID: {execution_id}")
 
         # Polling interval specified in config.yaml
-        polling_interval = config.get('polling_rate_minutes', 9)  # Default to 9 minutes if not set
+        polling_interval = config.get('polling_rate_seconds', 10)  # Default to 10 seconds if not set
 
         # Wait for the query execution to complete
         while True:
@@ -104,8 +104,8 @@ def execute_query_and_get_results(query_id):
                     print(f"Query {execution_id} failed.")
                     return []
                 else:
-                    print(f"Query {execution_id} is executing, waiting {polling_interval} minutes...")
-                    time.sleep(polling_interval * 60)
+                    print(f"Query {execution_id} is executing, waiting {polling_interval} seconds...")
+                    time.sleep(polling_interval)
 
             except DuneError as e:
                 print(f"Error with Dune query execution: {e}")
@@ -131,7 +131,7 @@ def store_data(block, bundles):
     with open(f"data/block_{block['number']}.json", 'w') as f:
         json.dump(block_dict, f, indent=4)
 
-    with open(f"data/bundles_{block['number']}.json", 'w') as f:
+    with open(f"data/bundles_{block['number']}.json', 'w") as f:
         json.dump(bundles, f, indent=4)
 
     print(f"Stored data for block {block['number']}")
