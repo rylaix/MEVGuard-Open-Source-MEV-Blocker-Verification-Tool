@@ -4,8 +4,9 @@ import time
 from web3 import Web3
 from web3.datastructures import AttributeDict
 from dune_client.client import DuneClient
-from dune_client.query import Parameter, QueryBase
 from dune_client.models import DuneError, ExecutionState
+from dune_client.query import QueryBase
+from dune_client.types import QueryParameter
 from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
 import yaml
@@ -19,21 +20,29 @@ config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.ya
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
-# Load SQL query from file
-query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_backruns.sql')
-with open(query_path, 'r') as file:
-    local_query_sql = file.read()
+# Load paths from config.yaml
+data_dir = config['data_storage']['data_directory']
+logs_dir = config['data_storage']['logs_directory']
+log_filename = config['data_storage']['log_filename']
 
-# Load the C extension
-try:
-    import c_extension
-except ImportError:
-    c_extension = None
+# Ensure data and logs directories exist
+os.makedirs(data_dir, exist_ok=True)
+os.makedirs(logs_dir, exist_ok=True)
+
+# Load SQL queries from files
+backrun_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_backruns.sql')
+with open(backrun_query_path, 'r') as file:
+    local_backrun_query_sql = file.read()
+
+fetch_remaining_transactions_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_remaining_transactions.sql')
+with open(fetch_remaining_transactions_query_path, 'r') as file:
+    local_non_mev_query_sql = file.read()
 
 # Initialize Web3 and DuneClient outside the class
 rpc_node_url = os.getenv('RPC_NODE_URL')
 dune_api_key = os.getenv('DUNE_API_KEY')
-dune_query_id = os.getenv('DUNE_QUERY_ID')
+dune_backrun_query_id = config['dune_query_id']  # Updated to use config.yaml
+dune_non_mev_query_id = config['second_dune_query_id']  # Updated to use config.yaml
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
 
@@ -57,55 +66,81 @@ def fetch_block_contents(block_number):
     print(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
     return block
 
-def update_query_if_needed(query_id, local_sql):
-    """Check the Dune query content and update if needed."""
-    try:
-        # Fetch the existing query SQL from Dune
-        existing_query = dune_client.get_query(query_id)
-        existing_sql = existing_query['sql']
+def log_discrepancy_and_abort(message):
+    """Log an error message and abort the script."""
+    log_path = os.path.join(logs_dir, log_filename)
+    with open(log_path, 'a') as log_file:
+        log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+    print(message)
+    exit(1)
 
-        # Compare with local SQL
+def compare_and_validate_sql(query_id, local_sql):
+    """Fetch the SQL content from Dune using the query ID and compare it with the local SQL."""
+    if not config.get('validate_sql', True):
+        print("SQL validation is disabled. Skipping check.")
+        return True
+
+    try:
+        # Fetch the query details directly from Dune's API without converting it to a DuneQuery object
+        response = dune_client._get(f"/query/{query_id}")
+
+        # Check if the response contains SQL
+        existing_sql = response.get('sql')
+        if existing_sql is None:
+            log_discrepancy_and_abort(f"SQL content not found for query ID {query_id}. Full response: {response}")
+
+        # Compare the fetched SQL with the local SQL
         if existing_sql.strip() != local_sql.strip():
-            print("Local SQL differs from existing Dune query. Updating Dune query...")
-            dune_client.update_query(query_id, local_sql)
-            print("Dune query updated.")
+            log_discrepancy_and_abort(
+                f"Local SQL differs from the Dune query for query ID {query_id}. "
+                "Please update the Dune query or local SQL to match."
+            )
         else:
-            print("Dune query SQL matches local SQL.")
+            print(f"Dune query SQL matches local SQL for query ID {query_id}.")
+            return True
 
     except DuneError as e:
-        print(f"Error checking/updating Dune query: {e}")
-        raise
+        log_discrepancy_and_abort(f"Error fetching SQL content from Dune for query ID {query_id}: {e}")
 
-def execute_query_and_get_results(query_id):
+    return False
+
+def execute_query_and_get_results(query_id, start_block=None, end_block=None):
     """Execute the query on Dune and get the results."""
     try:
-        execution_response = dune_client.execute_query(query_id)
+        # Create query parameters
+        parameters = [
+            QueryParameter.number_type(name="start_block", value=start_block),
+            QueryParameter.number_type(name="end_block", value=end_block)
+        ]
+
+        # Construct the query object
+        query = QueryBase(query_id=query_id, params=parameters)
+
+        # Execute the query
+        execution_response = dune_client.execute_query(query)
         execution_id = execution_response.execution_id
         print(f"Query execution ID: {execution_id}")
 
         # Polling interval specified in config.yaml
-        polling_interval = config.get('polling_rate_minutes', 9)  # Default to 9 minutes if not set
+        polling_interval = config.get('polling_rate_seconds', 10)  # Default to 10 seconds if not set
 
         # Wait for the query execution to complete
         while True:
             try:
                 status = dune_client.get_execution_status(execution_id).state
-                if status == ExecutionState.COMPLETED:
+                if status == "COMPLETED":
                     print(f"Query {execution_id} completed.")
                     # Fetch the latest result from the executed query
                     result = dune_client.get_execution_results(execution_id)
-
-                    # Ensure the results are retrieved as a list of dictionaries
                     bundles = result.get_rows()
-
-                    print(f"Identified {len(bundles)} MEV Blocker bundles.")
+                    print(f"Identified {len(bundles)} results.")
                     return bundles
-                elif status == ExecutionState.FAILED:
+                elif status == "FAILED":
                     print(f"Query {execution_id} failed.")
                     return []
                 else:
-                    print(f"Query {execution_id} is executing, waiting {polling_interval} minutes...")
-                    time.sleep(polling_interval * 60)
+                    print(f"Query {execution_id} is executing, waiting {polling_interval} seconds...")
+                    time.sleep(polling_interval)
 
             except DuneError as e:
                 print(f"Error with Dune query execution: {e}")
@@ -114,24 +149,60 @@ def execute_query_and_get_results(query_id):
     except DuneError as e:
         print(f"Error executing query: {e}")
         return []
+    
+def get_latest_processed_block():
+    """Get the latest processed block from the data directory."""
+    files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
+    if not files:
+        print("No processed blocks found, starting from default block range.")
+        return None
+    latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
+    latest_block = int(latest_file.split('_')[1].split('.')[0])
+    return latest_block
 
-def get_mev_blocker_bundles(start_block, end_block):
+def get_mev_blocker_bundles():
     """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""
-    # Update the query on Dune if needed
-    update_query_if_needed(dune_query_id, local_query_sql)
+    # Compare and validate the SQL
+    if not compare_and_validate_sql(dune_backrun_query_id, local_backrun_query_sql):
+        return None
+
+    # Get start and end blocks
+    latest_block_number = web3.eth.block_number
+    block_delay_seconds = config.get('block_delay_seconds', 0)
+    
+    # Adjusting the latest block number to account for block propagation delay
+    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+    start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
 
     # Execute the query and get results
-    return execute_query_and_get_results(dune_query_id)
+    return execute_query_and_get_results(dune_backrun_query_id, start_block, end_block)
+
+def get_non_mev_transactions():
+    """Prepare and execute Dune Analytics query to get non-MEV transactions."""
+    # Compare and validate the SQL
+    if not compare_and_validate_sql(dune_non_mev_query_id, local_non_mev_query_sql):
+        return None
+
+    # Get start and end blocks
+    latest_block_number = web3.eth.block_number
+    block_delay_seconds = config.get('block_delay_seconds', 0)
+    
+    # Adjusting the latest block number to account for block propagation delay
+    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+    start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+
+    # Execute the query and get results
+    return execute_query_and_get_results(dune_non_mev_query_id, start_block, end_block)
 
 def store_data(block, bundles):
     """Store the block and bundles data into the data directory."""
     # Convert block to dictionary
     block_dict = convert_to_dict(block)
 
-    with open(f"data/block_{block['number']}.json", 'w') as f:
+    with open(os.path.join(data_dir, f"block_{block['number']}.json"), 'w') as f:
         json.dump(block_dict, f, indent=4)
 
-    with open(f"data/bundles_{block['number']}.json", 'w') as f:
+    with open(os.path.join(data_dir, f"bundles_{block['number']}.json"), 'w') as f:
         json.dump(bundles, f, indent=4)
 
     print(f"Stored data for block {block['number']}")
@@ -146,22 +217,21 @@ def process_block(block_number, bundles):
         print(f"Failed to process block {block_number}: {e}")
 
 if __name__ == "__main__":
-    # Define the block range or specific blocks to process from config
-    latest_block_number = web3.eth.block_number
-    start_block_offset = config.get('start_block_offset', 100)  # How far back to start from the latest block
-    num_blocks_to_process = config.get('num_blocks_to_process', 5)  # How many blocks to process
-
-    start_block = latest_block_number - start_block_offset
-    end_block = latest_block_number
-
-    # Fetch MEV Blocker bundles once
-    bundles = get_mev_blocker_bundles(start_block, end_block)
+    # Fetch MEV Blocker bundles
+    bundles = get_mev_blocker_bundles()
 
     if not bundles:
         print("No bundles retrieved. Exiting the script.")
         exit(1)
 
-    block_numbers = [latest_block_number - i for i in range(num_blocks_to_process)]  # Process the configured number of blocks
+    # Fetch non-MEV transactions
+    non_mev_transactions = get_non_mev_transactions()
+
+    if not non_mev_transactions:
+        print("No non-MEV transactions retrieved. Exiting the script.")
+        exit(1)
+
+    block_numbers = [web3.eth.block_number - i for i in range(config.get('num_blocks_to_process', 5))]  # Process the configured number of blocks
 
     # Use multiprocessing to handle multiple blocks concurrently
     with Pool(processes=cpu_count()) as pool:

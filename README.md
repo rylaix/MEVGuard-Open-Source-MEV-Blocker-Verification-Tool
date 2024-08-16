@@ -83,18 +83,21 @@ Create a `.env` file in the root directory with the following variables:
 ```
 RPC_NODE_URL=https://your-ethereum-node-url
 DUNE_API_KEY=your-dune-api-key
-DUNE_QUERY_ID=your-dune-query-id
 ```
 
 - **RPC_NODE_URL**: URL of your Ethereum node provider (e.g., Infura, Alchemy).
 - **DUNE_API_KEY**: API key for accessing Dune Analytics.
-- **DUNE_QUERY_ID**: The ID of the Dune query used to fetch MEV Blocker transactions.
 
 ### 6. Configuration
 
-Additional configurations can be added in the `config/config.yaml` file if necessary.
+Additional configurations are mentioned in the `config/config.yaml` file.
 
 ## Running the Data Gathering Script
+
+To fetch and store first block to proceed, run the following command:
+```bash
+python src/gather_to_start.py
+```
 
 To fetch and store block and bundle data, run the following command:
 
@@ -116,24 +119,32 @@ Below is the structure of the project directory:
 MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 │
 ├── src/
-│   ├── __init__.py               # Identification of folder so python can see it
-│   ├── data_gathering.py         # Script for data gathering
-│   ├── utils.py                  # Utility functions (logging, etc.)
+│   ├── __init__.py                         # Identification of folder so python can see it
+│   ├── data_gathering.py                   # Script for data gathering
+│   ├── gather_to_start.py                  # Use this file to have a block to start
+│   ├── utils.py                            # Utility functions (logging, etc.)
 │
-├── c_extension/                  # Directory for C extension code
-│   ├── c_extension.c             # C extension for optimized calculations
-│   └── setup.py                  # Setup script for building C extensions
+├── c_extension/                            # Directory for C extension code
+│   ├── c_extension.c                       # C extension for optimized calculations
+│   └── setup.py                            # Setup script for building C extensions
 │
-├── data/                         # Directory where fetched data is stored
-│   ├── __init__.py               # Identification of folder so python can see it
+├── data/                                   # Directory where fetched data is stored
+│   ├── __init__.py                         # Identification of folder so python can see it
+│
+├── logs/                                   # Default dir for logs
+│
+├── queries/                                # Directory with all queries used
+│   ├── fetch_backruns.sql                  # Fetch Mevblocker backruns
+│   ├── fetch_latest_block.sql              # Query to have a latest block, to have with what start on
+│   └── fetch_remaining_transactions.sql    # Fetch data outside of MEV
 │
 ├── config/
-│   └── config.yaml               # Configuration file
+│   └── config.yaml                         # Configuration file
 │
-├── .gitignore                    # Git ignore file
-├── requirements.txt              # Python dependencies
-├── .env                          # Crucial to handle Keys 
-└── README.md                     # Project documentation
+├── .gitignore                              # Git ignore file
+├── requirements.txt                        # Python dependencies
+├── .env                                    # Crucial to handle Keys 
+└── README.md                               # Project documentation
 ```
 
 ## Troubleshooting
