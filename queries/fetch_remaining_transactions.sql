@@ -1,16 +1,18 @@
 SELECT 
     e.block_number, 
-    e.timestamp,
-    e.transactions
+    e.block_time AS timestamp,
+    e.hash,
+    e."from",
+    e."to",
+    e.value,
+    e.gas_used AS gas,
+    e.gas_price,
+    e.index AS transaction_index,
+    e.data AS calldata
 FROM 
     ethereum.transactions e
 WHERE 
-    e.block_number >= {{start_block}} 
-    AND e.block_number <= {{end_block}} 
-    AND e.hash NOT IN (
-        SELECT from_hex(CAST(json_extract(transactions, '$[0].hash') AS VARCHAR)) 
-        FROM mevblocker.raw_bundles t 
-        WHERE t.blockNumber = e.block_number
-    )
+    e.block_number >= {{start_block}}
+    AND e.block_number <= {{end_block}}
 ORDER BY 
-    e.block_number, e.hash;
+    e.block_number, e.index;

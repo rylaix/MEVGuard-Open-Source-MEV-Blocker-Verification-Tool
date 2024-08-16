@@ -41,8 +41,8 @@ with open(fetch_remaining_transactions_query_path, 'r') as file:
 # Initialize Web3 and DuneClient outside the class
 rpc_node_url = os.getenv('RPC_NODE_URL')
 dune_api_key = os.getenv('DUNE_API_KEY')
-dune_backrun_query_id = config['dune_query_id']  # Updated to use config.yaml
-dune_non_mev_query_id = config['second_dune_query_id']  # Updated to use config.yaml
+all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
+confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
 
@@ -128,14 +128,14 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
         while True:
             try:
                 status = dune_client.get_execution_status(execution_id).state
-                if status == "COMPLETED":
+                if status == ExecutionState.COMPLETED:
                     print(f"Query {execution_id} completed.")
                     # Fetch the latest result from the executed query
                     result = dune_client.get_execution_results(execution_id)
                     bundles = result.get_rows()
                     print(f"Identified {len(bundles)} results.")
                     return bundles
-                elif status == "FAILED":
+                elif status == ExecutionState.FAILED:
                     print(f"Query {execution_id} failed.")
                     return []
                 else:
@@ -149,7 +149,7 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
     except DuneError as e:
         print(f"Error executing query: {e}")
         return []
-    
+
 def get_latest_processed_block():
     """Get the latest processed block from the data directory."""
     files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
@@ -163,7 +163,7 @@ def get_latest_processed_block():
 def get_mev_blocker_bundles():
     """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""
     # Compare and validate the SQL
-    if not compare_and_validate_sql(dune_backrun_query_id, local_backrun_query_sql):
+    if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
     # Get start and end blocks
@@ -175,12 +175,12 @@ def get_mev_blocker_bundles():
     start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
 
     # Execute the query and get results
-    return execute_query_and_get_results(dune_backrun_query_id, start_block, end_block)
+    return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
 
 def get_non_mev_transactions():
     """Prepare and execute Dune Analytics query to get non-MEV transactions."""
     # Compare and validate the SQL
-    if not compare_and_validate_sql(dune_non_mev_query_id, local_non_mev_query_sql):
+    if not compare_and_validate_sql(confirmed_transactions_per_block, local_non_mev_query_sql):
         return None
 
     # Get start and end blocks
@@ -192,7 +192,7 @@ def get_non_mev_transactions():
     start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
 
     # Execute the query and get results
-    return execute_query_and_get_results(dune_non_mev_query_id, start_block, end_block)
+    return execute_query_and_get_results(confirmed_transactions_per_block, start_block, end_block)
 
 def store_data(block, bundles):
     """Store the block and bundles data into the data directory."""
