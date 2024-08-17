@@ -9,6 +9,7 @@ SELECT
     e.gas_price,
     e.index AS transaction_index,
     e.data AS calldata
+    e.nonce
 FROM 
     ethereum.transactions e
 WHERE 
