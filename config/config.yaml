@@ -1,5 +1,5 @@
-all_mev_blocker_bundle_per_block: 3993272  # The Dune query ID used for fetching data
-confirmed_transactions_per_block: 3997853
+all_mev_blocker_bundle_per_block: 3997907  # The Dune query ID used for fetching data
+confirmed_transactions_per_block: 3997908
 polling_rate_seconds: 10  # Polling interval in seconds to check the status of the Dune query
 start_block_offset: 20  # Number of blocks back from the latest block to start fetching
 block_delay_seconds: 10  # Delay in seconds to ensure data availability for the end block

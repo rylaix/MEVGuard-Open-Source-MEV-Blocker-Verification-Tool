@@ -8,7 +8,7 @@ SELECT
     e.gas_used AS gas,
     e.gas_price,
     e.index AS transaction_index,
-    e.data AS calldata
+    e.data AS calldata,
     e.nonce
 FROM 
     ethereum.transactions e
