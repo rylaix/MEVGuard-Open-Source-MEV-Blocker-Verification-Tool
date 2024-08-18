@@ -172,7 +172,12 @@ def get_mev_blocker_bundles():
     
     # Adjusting the latest block number to account for block propagation delay
     end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+    latest_processed_block = get_latest_processed_block()
+    if latest_processed_block is not None:
+        start_block = latest_processed_block - config.get('start_block_offset', 100)
+    else:
+        start_block = latest_block_number - config.get('start_block_offset', 100)
+    print(start_block, end_block)
 
     # Execute the query and get results
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
@@ -189,7 +194,12 @@ def get_non_mev_transactions():
     
     # Adjusting the latest block number to account for block propagation delay
     end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    start_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+    latest_processed_block = get_latest_processed_block()
+    if latest_processed_block is not None:
+        start_block = latest_processed_block - config.get('start_block_offset', 100)
+    else:
+        start_block = latest_block_number - config.get('start_block_offset', 100)
+    print(start_block, end_block)
 
     # Execute the query and get results
     return execute_query_and_get_results(confirmed_transactions_per_block, start_block, end_block)
@@ -220,9 +230,15 @@ if __name__ == "__main__":
     # Fetch MEV Blocker bundles
     bundles = get_mev_blocker_bundles()
 
+    # Option, which handles logic when 0 results are returned
+    abort_on_empty_first_query = config.get('abort_on_empty_first_query', True)
+
     if not bundles:
-        print("No bundles retrieved. Exiting the script.")
-        exit(1)
+        if abort_on_empty_first_query:
+            print("No bundles retrieved. Exiting the script.")
+            exit(1)
+        else:
+            print("No bundles retrieved. Proceeding to the next query...")
 
     # Fetch non-MEV transactions
     non_mev_transactions = get_non_mev_transactions()
@@ -231,7 +247,18 @@ if __name__ == "__main__":
         print("No non-MEV transactions retrieved. Exiting the script.")
         exit(1)
 
-    block_numbers = [web3.eth.block_number - i for i in range(config.get('num_blocks_to_process', 5))]  # Process the configured number of blocks
+    # Determine the number of blocks to process
+    latest_block_number = web3.eth.block_number
+    latest_processed_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+
+    # Check if `num_blocks_to_process` is set to "all"
+    num_blocks_to_process = config.get('num_blocks_to_process', 5)
+    if num_blocks_to_process == "all":
+        # Gather all blocks from the latest processed block to the latest block on the blockchain
+        block_numbers = list(range(latest_processed_block, latest_block_number + 1))
+    else:
+        # Gather a specified number of blocks (e.g., 5)
+        block_numbers = [latest_processed_block - i for i in range(num_blocks_to_process)]
 
     # Use multiprocessing to handle multiple blocks concurrently
     with Pool(processes=cpu_count()) as pool:

@@ -121,21 +121,19 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 ├── src/
 │   ├── __init__.py                         # Identification of folder so python can see it
 │   ├── data_gathering.py                   # Script for data gathering
-│   ├── gather_to_start.py                  # Use this file to have a block to start
-│   ├── utils.py                            # Utility functions (logging, etc.)
+│   └── utils.py                            # Utility functions (logging, etc.)
 │
 ├── c_extension/                            # Directory for C extension code
 │   ├── c_extension.c                       # C extension for optimized calculations
 │   └── setup.py                            # Setup script for building C extensions
 │
 ├── data/                                   # Directory where fetched data is stored
-│   ├── __init__.py                         # Identification of folder so python can see it
+│   └── __init__.py                         # Identification of folder so python can see it
 │
 ├── logs/                                   # Default dir for logs
 │
 ├── queries/                                # Directory with all queries used
 │   ├── fetch_backruns.sql                  # Fetch Mevblocker backruns
-│   ├── fetch_latest_block.sql              # Query to have a latest block, to have with what start on
 │   └── fetch_remaining_transactions.sql    # Fetch data outside of MEV
 │
 ├── config/
