@@ -41,10 +41,18 @@ with open(fetch_remaining_transactions_query_path, 'r') as file:
 # Initialize Web3 and DuneClient outside the class
 rpc_node_url = os.getenv('RPC_NODE_URL')
 dune_api_key = os.getenv('DUNE_API_KEY')
-all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
-confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
+
+# Load query ID's
+all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
+confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
+
+# Load gap fulfilling settings
+fulfill_gap = config['gap_fulfilling'].get('fulfill_gap', False)
+manual_start_block = config['gap_fulfilling'].get('start_block', 0)
+manual_end_block = config['gap_fulfilling'].get('end_block', 0)
+
 
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
@@ -166,18 +174,24 @@ def get_mev_blocker_bundles():
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
-    # Get start and end blocks
-    latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 0)
-    
-    # Adjusting the latest block number to account for block propagation delay
-    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    latest_processed_block = get_latest_processed_block()
-    if latest_processed_block is not None:
-        start_block = latest_processed_block - config.get('start_block_offset', 100)
+    # Determine block range if "fulfill_gap" = true
+    if fulfill_gap:
+        # Use manually specified blocks
+        start_block = manual_start_block
+        end_block = manual_end_block
     else:
-        start_block = latest_block_number - config.get('start_block_offset', 100)
-    print(start_block, end_block)
+    # Get start and end blocks
+        latest_block_number = web3.eth.block_number
+        block_delay_seconds = config.get('block_delay_seconds', 0)
+        
+        # Adjusting the latest block number to account for block propagation delay
+        end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+        latest_processed_block = get_latest_processed_block()
+        if latest_processed_block is not None:
+            start_block = latest_processed_block - config.get('start_block_offset', 100)
+        else:
+            start_block = latest_block_number - config.get('start_block_offset', 100)
+    print(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
@@ -188,18 +202,24 @@ def get_non_mev_transactions():
     if not compare_and_validate_sql(confirmed_transactions_per_block, local_non_mev_query_sql):
         return None
 
-    # Get start and end blocks
-    latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 0)
-    
-    # Adjusting the latest block number to account for block propagation delay
-    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    latest_processed_block = get_latest_processed_block()
-    if latest_processed_block is not None:
-        start_block = latest_processed_block - config.get('start_block_offset', 100)
+    # Determine block range
+    if fulfill_gap:
+        # Use manually specified blocks
+        start_block = manual_start_block
+        end_block = manual_end_block
     else:
-        start_block = latest_block_number - config.get('start_block_offset', 100)
-    print(start_block, end_block)
+        # Get start and end blocks
+        latest_block_number = web3.eth.block_number
+        block_delay_seconds = config.get('block_delay_seconds', 0)
+        
+        # Adjusting the latest block number to account for block propagation delay
+        end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+        latest_processed_block = get_latest_processed_block()
+        if latest_processed_block is not None:
+            start_block = latest_processed_block - config.get('start_block_offset', 100)
+        else:
+            start_block = latest_block_number - config.get('start_block_offset', 100)
+    print(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
     return execute_query_and_get_results(confirmed_transactions_per_block, start_block, end_block)

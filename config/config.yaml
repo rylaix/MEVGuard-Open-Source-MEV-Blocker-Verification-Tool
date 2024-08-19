@@ -21,3 +21,8 @@ error_handling:
 performance_tuning:
   use_multiprocessing: true  # Enable or disable multiprocessing
   max_processes: auto  # Maximum number of processes ('auto' uses all available CPUs)
+
+gap_fulfilling:
+  fulfill_gap: false  # Set to true to enable manual block range gathering
+  start_block: 0  # Specify the start block manually
+  end_block: 0    # Specify the end block manually
