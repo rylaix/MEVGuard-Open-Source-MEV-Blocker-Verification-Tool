@@ -94,11 +94,6 @@ Additional configurations are mentioned in the `config/config.yaml` file.
 
 ## Running the Data Gathering Script
 
-To fetch and store first block to proceed, run the following command:
-```bash
-python src/gather_to_start.py
-```
-
 To fetch and store block and bundle data, run the following command:
 
 ```bash
