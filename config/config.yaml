@@ -1,4 +1,23 @@
-dune_query_id: 2446884
-polling_rate_seconds: 10 # Polling interval in seconds.
-start_block_offset: 100  # Number of blocks back from the latest block to start fetching
-num_blocks_to_process: 5  # Number of blocks to process
+all_mev_blocker_bundle_per_block: 3997907  # The Dune query ID used for fetching data
+confirmed_transactions_per_block: 3997908
+polling_rate_seconds: 10  # Polling interval in seconds to check the status of the Dune query
+start_block_offset: 20  # Number of blocks back from the latest block to start fetching
+block_delay_seconds: 10  # Delay in seconds to ensure data availability for the end block
+validate_sql: false  # Set to true to enable SQL validation, false to disable. False by default, as function is available only for paid Dune clients
+num_blocks_to_process: "all" # Set this to "all" to gather all blocks, or specify a number
+abort_on_empty_first_query: false  # Set to false to proceed with the next query if 1st is returning 0 results.
+
+# Data Storage Configuration
+data_storage:
+  data_directory: "data"  # Directory to store block and bundle data
+  logs_directory: "logs"  # Directory to store log files
+  log_filename: "logfile.log"  # The filename for the log file
+
+# Error Handling and Logging
+error_handling:
+  log_errors: true  # Enable or disable error logging
+
+# Performance Tuning
+performance_tuning:
+  use_multiprocessing: true  # Enable or disable multiprocessing
+  max_processes: auto  # Maximum number of processes ('auto' uses all available CPUs)

@@ -14,4 +14,13 @@ build/
 # Ignore VSCode settings
 .vscode/
 
+# Ignore everything in the logs directory
+logs/*
+
+# Except for __init__.py
+!logs/__init__.py
+
+# Ignore all .json files in the data directory
+data/*.json
+
 # Additional custom directories or files can be added here, if it will be needed in future development.
