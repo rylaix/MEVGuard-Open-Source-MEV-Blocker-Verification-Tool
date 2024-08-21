@@ -10,6 +10,10 @@ SELECT
     e.index AS transaction_index,
     e.data AS calldata,
     e.nonce
+    --e.max_fee_per_gas,
+    --e.max_priority_fee_per_gas,
+    --gas_limit,
+    --access_list (this one especially CAN BE needed, even if it's EIP-2930, must see in simulating tests)
 FROM 
     ethereum.transactions e
 WHERE 
