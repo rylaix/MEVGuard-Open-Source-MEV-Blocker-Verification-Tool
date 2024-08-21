@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from utils import setup_logging, log
 from web3 import Web3
 from web3.datastructures import AttributeDict
 from dune_client.client import DuneClient
@@ -41,10 +42,12 @@ with open(fetch_remaining_transactions_query_path, 'r') as file:
 # Initialize Web3 and DuneClient outside the class
 rpc_node_url = os.getenv('RPC_NODE_URL')
 dune_api_key = os.getenv('DUNE_API_KEY')
-all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
-confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
+
+# Load query ID's
+all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
+confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
@@ -57,13 +60,13 @@ def convert_to_dict(obj):
             return obj.hex()
         return obj
     except Exception as e:
-        print(f"Error converting to dict: {e}")
+        log(f"Error converting to dict: {e}")
         return str(obj)  # Fallback to string representation if any error occurs
 
 def fetch_block_contents(block_number):
     """Fetch the contents of a block given its number."""
     block = web3.eth.get_block(block_number, full_transactions=True)
-    print(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
+    log(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
     return block
 
 def log_discrepancy_and_abort(message):
@@ -71,13 +74,13 @@ def log_discrepancy_and_abort(message):
     log_path = os.path.join(logs_dir, log_filename)
     with open(log_path, 'a') as log_file:
         log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-    print(message)
+    log(message)
     exit(1)
 
 def compare_and_validate_sql(query_id, local_sql):
     """Fetch the SQL content from Dune using the query ID and compare it with the local SQL."""
     if not config.get('validate_sql', True):
-        print("SQL validation is disabled. Skipping check.")
+        log("SQL validation is disabled. Skipping check.")
         return True
 
     try:
@@ -96,7 +99,7 @@ def compare_and_validate_sql(query_id, local_sql):
                 "Please update the Dune query or local SQL to match."
             )
         else:
-            print(f"Dune query SQL matches local SQL for query ID {query_id}.")
+            log(f"Dune query SQL matches local SQL for query ID {query_id}.")
             return True
 
     except DuneError as e:
@@ -119,7 +122,7 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
         # Execute the query
         execution_response = dune_client.execute_query(query)
         execution_id = execution_response.execution_id
-        print(f"Query execution ID: {execution_id}")
+        log(f"Query execution ID: {execution_id}")
 
         # Polling interval specified in config.yaml
         polling_interval = config.get('polling_rate_seconds', 10)  # Default to 10 seconds if not set
@@ -129,32 +132,32 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
             try:
                 status = dune_client.get_execution_status(execution_id).state
                 if status == ExecutionState.COMPLETED:
-                    print(f"Query {execution_id} completed.")
+                    log(f"Query {execution_id} completed.")
                     # Fetch the latest result from the executed query
                     result = dune_client.get_execution_results(execution_id)
                     bundles = result.get_rows()
-                    print(f"Identified {len(bundles)} results.")
+                    log(f"Identified {len(bundles)} results.")
                     return bundles
                 elif status == ExecutionState.FAILED:
-                    print(f"Query {execution_id} failed.")
+                    log(f"Query {execution_id} failed.")
                     return []
                 else:
-                    print(f"Query {execution_id} is executing, waiting {polling_interval} seconds...")
+                    log(f"Query {execution_id} is executing, waiting {polling_interval} seconds...")
                     time.sleep(polling_interval)
 
             except DuneError as e:
-                print(f"Error with Dune query execution: {e}")
+                log(f"Error with Dune query execution: {e}")
                 return []
 
     except DuneError as e:
-        print(f"Error executing query: {e}")
+        log(f"Error executing query: {e}")
         return []
 
 def get_latest_processed_block():
     """Get the latest processed block from the data directory."""
     files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
     if not files:
-        print("No processed blocks found, starting from default block range.")
+        log("No processed blocks found, starting from default block range.")
         return None
     latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
     latest_block = int(latest_file.split('_')[1].split('.')[0])
@@ -166,18 +169,21 @@ def get_mev_blocker_bundles():
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
-    # Get start and end blocks
+    # Get the latest block number from the blockchain
     latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 0)
-    
-    # Adjusting the latest block number to account for block propagation delay
-    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    latest_processed_block = get_latest_processed_block()
-    if latest_processed_block is not None:
-        start_block = latest_processed_block - config.get('start_block_offset', 100)
-    else:
-        start_block = latest_block_number - config.get('start_block_offset', 100)
-    print(start_block, end_block)
+    block_delay_seconds = config.get('block_delay_seconds', 10)
+
+    # Determine start_block and end_block
+    start_block = config.get('start_block')
+    if start_block is None or start_block <= 0:
+        latest_processed_block = get_latest_processed_block()
+        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
+
+    end_block = config.get('end_block')
+    if end_block is None or end_block <= 0:
+        end_block = latest_block_number - int(block_delay_seconds // 12)
+
+    log(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
@@ -188,18 +194,21 @@ def get_non_mev_transactions():
     if not compare_and_validate_sql(confirmed_transactions_per_block, local_non_mev_query_sql):
         return None
 
-    # Get start and end blocks
+    # Get the latest block number from the blockchain
     latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 0)
-    
-    # Adjusting the latest block number to account for block propagation delay
-    end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
-    latest_processed_block = get_latest_processed_block()
-    if latest_processed_block is not None:
-        start_block = latest_processed_block - config.get('start_block_offset', 100)
-    else:
-        start_block = latest_block_number - config.get('start_block_offset', 100)
-    print(start_block, end_block)
+    block_delay_seconds = config.get('block_delay_seconds', 10)
+
+    # Determine start_block and end_block
+    start_block = config.get('start_block')
+    if start_block is None or start_block <= 0:
+        latest_processed_block = get_latest_processed_block()
+        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
+
+    end_block = config.get('end_block')
+    if end_block is None or end_block <= 0:
+        end_block = latest_block_number - int(block_delay_seconds // 12)
+
+    log(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
     return execute_query_and_get_results(confirmed_transactions_per_block, start_block, end_block)
@@ -215,7 +224,7 @@ def store_data(block, bundles):
     with open(os.path.join(data_dir, f"bundles_{block['number']}.json"), 'w') as f:
         json.dump(bundles, f, indent=4)
 
-    print(f"Stored data for block {block['number']}")
+    log(f"Stored data for block {block['number']}")
 
 def process_block(block_number, bundles):
     """Process a single block: fetch, identify bundles, and store data."""
@@ -224,9 +233,15 @@ def process_block(block_number, bundles):
         # Here we use the bundles fetched previously
         store_data(block, bundles)
     except Exception as e:
-        print(f"Failed to process block {block_number}: {e}")
+        log(f"Failed to process block {block_number}: {e}")
 
 if __name__ == "__main__":
+    # Initialize logging with the log file from config.yaml
+    log_path = os.path.join(logs_dir, log_filename)
+    setup_logging(log_path)
+
+    log("Starting data gathering process...")
+
     # Fetch MEV Blocker bundles
     bundles = get_mev_blocker_bundles()
 
@@ -235,16 +250,16 @@ if __name__ == "__main__":
 
     if not bundles:
         if abort_on_empty_first_query:
-            print("No bundles retrieved. Exiting the script.")
+            log("No bundles retrieved. Exiting the script.")
             exit(1)
         else:
-            print("No bundles retrieved. Proceeding to the next query...")
+            log("No bundles retrieved. Proceeding to the next query...")
 
     # Fetch non-MEV transactions
     non_mev_transactions = get_non_mev_transactions()
 
     if not non_mev_transactions:
-        print("No non-MEV transactions retrieved. Exiting the script.")
+        log("No non-MEV transactions retrieved. Exiting the script.")
         exit(1)
 
     # Determine the number of blocks to process
@@ -264,4 +279,4 @@ if __name__ == "__main__":
     with Pool(processes=cpu_count()) as pool:
         pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
 
-    print("All blocks processed.")
+    log("All blocks processed.")
