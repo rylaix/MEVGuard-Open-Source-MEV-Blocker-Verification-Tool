@@ -48,12 +48,6 @@ dune_client = DuneClient(api_key=dune_api_key)
 all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
 confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 
-# Load gap fulfilling settings
-fulfill_gap = config['gap_fulfilling'].get('fulfill_gap', False)
-manual_start_block = config['gap_fulfilling'].get('start_block', 0)
-manual_end_block = config['gap_fulfilling'].get('end_block', 0)
-
-
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
     try:
@@ -174,23 +168,20 @@ def get_mev_blocker_bundles():
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
-    # Determine block range if "fulfill_gap" = true
-    if fulfill_gap:
-        # Use manually specified blocks
-        start_block = manual_start_block
-        end_block = manual_end_block
-    else:
-    # Get start and end blocks
-        latest_block_number = web3.eth.block_number
-        block_delay_seconds = config.get('block_delay_seconds', 0)
-        
-        # Adjusting the latest block number to account for block propagation delay
-        end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+    # Get the latest block number from the blockchain
+    latest_block_number = web3.eth.block_number
+    block_delay_seconds = config.get('block_delay_seconds', 10)
+
+    # Determine start_block and end_block
+    start_block = config.get('start_block')
+    if start_block is None or start_block <= 0:
         latest_processed_block = get_latest_processed_block()
-        if latest_processed_block is not None:
-            start_block = latest_processed_block - config.get('start_block_offset', 100)
-        else:
-            start_block = latest_block_number - config.get('start_block_offset', 100)
+        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
+
+    end_block = config.get('end_block')
+    if end_block is None or end_block <= 0:
+        end_block = latest_block_number - int(block_delay_seconds // 12)
+
     print(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
@@ -202,23 +193,20 @@ def get_non_mev_transactions():
     if not compare_and_validate_sql(confirmed_transactions_per_block, local_non_mev_query_sql):
         return None
 
-    # Determine block range
-    if fulfill_gap:
-        # Use manually specified blocks
-        start_block = manual_start_block
-        end_block = manual_end_block
-    else:
-        # Get start and end blocks
-        latest_block_number = web3.eth.block_number
-        block_delay_seconds = config.get('block_delay_seconds', 0)
-        
-        # Adjusting the latest block number to account for block propagation delay
-        end_block = latest_block_number - int(block_delay_seconds // 12)  # Approximate block time for Ethereum is 12 seconds
+    # Get the latest block number from the blockchain
+    latest_block_number = web3.eth.block_number
+    block_delay_seconds = config.get('block_delay_seconds', 10)
+
+    # Determine start_block and end_block
+    start_block = config.get('start_block')
+    if start_block is None or start_block <= 0:
         latest_processed_block = get_latest_processed_block()
-        if latest_processed_block is not None:
-            start_block = latest_processed_block - config.get('start_block_offset', 100)
-        else:
-            start_block = latest_block_number - config.get('start_block_offset', 100)
+        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
+
+    end_block = config.get('end_block')
+    if end_block is None or end_block <= 0:
+        end_block = latest_block_number - int(block_delay_seconds // 12)
+
     print(f"Start block: {start_block}, End block: {end_block}")
 
     # Execute the query and get results
