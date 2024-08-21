@@ -19,7 +19,7 @@ data_storage:
 
 # Error Handling and Logging
 error_handling:
-  log_errors: true  # Enable or disable error logging
+  log_errors: true  # Enable or disable error and logging
 
 # Performance Tuning
 performance_tuning:
