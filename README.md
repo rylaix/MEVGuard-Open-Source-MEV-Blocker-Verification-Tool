@@ -78,7 +78,7 @@ python3 setup.py build_ext --inplace
 
 ### 5. Configure Environment Variables
 
-Create a `.env` file in the root directory with the following variables:
+Rename a `.env.example` file to `.env` in the root directory with the following variables:
 
 ```
 RPC_NODE_URL=https://your-ethereum-node-url
@@ -91,6 +91,9 @@ DUNE_API_KEY=your-dune-api-key
 ### 6. Configuration
 
 Additional configurations are mentioned in the `config/config.yaml` file.
+
+To setup query, create a dune query with contents from `fetch_backruns.sql". Be careful, all vars in dune must be set via button with brackets
+(sometimes Dune just ignores vars if they're inserted manually). Then, take Query ID and place it to a `all_mev_blocker_bundle_per_block` in `config.yaml`
 
 ## Running the Data Gathering Script
 
