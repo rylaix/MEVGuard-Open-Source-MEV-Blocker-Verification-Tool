@@ -47,7 +47,6 @@ dune_client = DuneClient(api_key=dune_api_key)
 
 # Load query ID's
 all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
-confirmed_transactions_per_block = config['confirmed_transactions_per_block']  # Updated to use config.yaml
 
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
@@ -188,31 +187,6 @@ def get_mev_blocker_bundles():
     # Execute the query and get results
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
 
-def get_non_mev_transactions():
-    """Prepare and execute Dune Analytics query to get non-MEV transactions."""
-    # Compare and validate the SQL
-    if not compare_and_validate_sql(confirmed_transactions_per_block, local_non_mev_query_sql):
-        return None
-
-    # Get the latest block number from the blockchain
-    latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 10)
-
-    # Determine start_block and end_block
-    start_block = config.get('start_block')
-    if start_block is None or start_block <= 0:
-        latest_processed_block = get_latest_processed_block()
-        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
-
-    end_block = config.get('end_block')
-    if end_block is None or end_block <= 0:
-        end_block = latest_block_number - int(block_delay_seconds // 12)
-
-    log(f"Start block: {start_block}, End block: {end_block}")
-
-    # Execute the query and get results
-    return execute_query_and_get_results(confirmed_transactions_per_block, start_block, end_block)
-
 def store_data(block, bundles):
     """Store the block and bundles data into the data directory."""
     # Convert block to dictionary
@@ -254,13 +228,6 @@ if __name__ == "__main__":
             exit(1)
         else:
             log("No bundles retrieved. Proceeding to the next query...")
-
-    # Fetch non-MEV transactions
-    non_mev_transactions = get_non_mev_transactions()
-
-    if not non_mev_transactions:
-        log("No non-MEV transactions retrieved. Exiting the script.")
-        exit(1)
 
     # Determine the number of blocks to process
     latest_block_number = web3.eth.block_number
