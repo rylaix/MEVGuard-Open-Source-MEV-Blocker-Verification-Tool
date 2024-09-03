@@ -13,6 +13,7 @@ from multiprocessing import Pool, cpu_count
 import yaml
 
 from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
+from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
 
 
 # Load environment variables
@@ -164,6 +165,28 @@ def get_latest_processed_block():
     latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
     latest_block = int(latest_file.split('_')[1].split('.')[0])
     return latest_block
+
+def process_bundles_and_simulate(bundles, block_number):
+    """
+    Process the gathered bundles and run simulations.
+    :param bundles: List of gathered bundles
+    :param block_number: Block number where the bundles are processed
+    """
+    if config['simulation']['state_management_enabled']:
+        for bundle in bundles:
+            tx_hashes = [tx['hash'] for tx in bundle['transactions']]
+            results = simulate_transaction_bundle(web3, tx_hashes, block_number)
+
+            for result in results:
+                updated_state = update_block_state(web3, result)
+                log(f"Updated state: {updated_state}")
+
+            # Verify transaction inclusion
+            for tx in tx_hashes:
+                if verify_transaction_inclusion(web3, block_number, tx):
+                    log(f"Transaction {tx} verified in block {block_number}")
+                else:
+                    log(f"Transaction {tx} NOT found in block {block_number}")
 
 def get_mev_blocker_bundles():
     """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""

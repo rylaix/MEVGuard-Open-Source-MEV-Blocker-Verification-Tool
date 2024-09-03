@@ -29,3 +29,9 @@ bundle_simulation:
   max_selected_bundles: 10  # Maximum number of bundles to select using the greedy algorithm
   simulation_enabled: true  # Enable or disable the simulation of selected bundles
   simulation_output_file: "simulation_results.json"  # The filename for storing simulation results
+
+# Simulation and State Management Configuration
+simulation:
+  state_management_enabled: true  # Enable or disable state management during simulation
+  trace_call_enabled: true  # Enable or disable trace_callMany for transaction simulation
+  trace_output_file: "trace_results.json"  # The filename for storing trace results
