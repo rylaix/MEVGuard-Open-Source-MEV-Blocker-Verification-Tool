@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
 import yaml
 
+from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
+
+
 # Load environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 load_dotenv(dotenv_path, override=True)
@@ -247,3 +250,21 @@ if __name__ == "__main__":
         pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
 
     log("All blocks processed.")
+
+# Greedy algorithm to select the best bundles
+    max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+    log(f"Selecting the best {max_selected_bundles} bundles using the greedy algorithm...")
+    selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
+
+    # Check if simulation is enabled
+    simulation_enabled = config['bundle_simulation']['simulation_enabled']
+    if simulation_enabled:
+        log("Simulating the selected bundles...")
+        simulation_results = simulate_bundles(selected_bundles)
+
+        # Store the simulation results
+        simulation_output_file = os.path.join(data_dir, config['bundle_simulation']['simulation_output_file'])
+        log(f"Storing the simulation results to {simulation_output_file}...")
+        store_simulation_results(simulation_results, simulation_output_file)
+
+    log("All tasks for this phase completed successfully.")

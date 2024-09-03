@@ -24,3 +24,8 @@ error_handling:
 performance_tuning:
   use_multiprocessing: true  # Enable or disable multiprocessing
   max_processes: auto  # Maximum number of processes ('auto' uses all available CPUs)
+
+bundle_simulation:
+  max_selected_bundles: 10  # Maximum number of bundles to select using the greedy algorithm
+  simulation_enabled: true  # Enable or disable the simulation of selected bundles
+  simulation_output_file: "simulation_results.json"  # The filename for storing simulation results
