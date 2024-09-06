@@ -29,10 +29,12 @@ with open(config_path, 'r') as file:
 data_dir = config['data_storage']['data_directory']
 logs_dir = config['data_storage']['logs_directory']
 log_filename = config['data_storage']['log_filename']
+simulation_results_dir = config['data_storage']['simulation_output_directory']
 
 # Ensure data and logs directories exist
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(logs_dir, exist_ok=True)
+os.makedirs(simulation_results_dir, exist_ok=True)
 
 # Load SQL queries from files
 backrun_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_backruns.sql')
@@ -166,27 +168,72 @@ def get_latest_processed_block():
     latest_block = int(latest_file.split('_')[1].split('.')[0])
     return latest_block
 
-def process_bundles_and_simulate(bundles, block_number):
+def get_simulated_blocks():
     """
-    Process the gathered bundles and run simulations.
-    :param bundles: List of gathered bundles
-    :param block_number: Block number where the bundles are processed
+    Check the simulation results directory to find blocks that have already been simulated.
+    :return: A list of block numbers that have already been simulated
     """
-    if config['simulation']['state_management_enabled']:
-        for bundle in bundles:
-            tx_hashes = [tx['hash'] for tx in bundle['transactions']]
-            results = simulate_transaction_bundle(web3, tx_hashes, block_number)
+    simulated_files = [f for f in os.listdir(simulation_results_dir) if f.endswith('.json')]
+    simulated_blocks = [int(f.split('_')[1].split('.')[0]) for f in simulated_files]
+    return simulated_blocks
 
-            for result in results:
-                updated_state = update_block_state(web3, result)
-                log(f"Updated state: {updated_state}")
+def load_existing_block_and_bundles(block_number):
+    """
+    Load the block and bundles from the data folder.
+    :param block_number: The block number to load
+    :return: Block data and bundles data
+    """
+    block_file = os.path.join(data_dir, f"block_{block_number}.json")
+    bundles_file = os.path.join(data_dir, f"bundles_{block_number}.json")
 
-            # Verify transaction inclusion
-            for tx in tx_hashes:
-                if verify_transaction_inclusion(web3, block_number, tx):
-                    log(f"Transaction {tx} verified in block {block_number}")
-                else:
-                    log(f"Transaction {tx} NOT found in block {block_number}")
+    with open(block_file, 'r') as block_f:
+        block_data = json.load(block_f)
+
+    with open(bundles_file, 'r') as bundles_f:
+        bundles_data = json.load(bundles_f)
+
+    return block_data, bundles_data
+
+def simulate_unprocessed_blocks():
+    """
+    Simulate all unprocessed (unsimulated) blocks by looking into the `data` directory.
+    """
+    # List all blocks saved in the data directory
+    all_blocks = [int(f.split('_')[1].split('.')[0]) for f in os.listdir(data_dir) if f.startswith('block_')]
+    
+    # Get the blocks that have already been simulated
+    simulated_blocks = get_simulated_blocks()
+
+    # Filter out the blocks that have already been simulated
+    unprocessed_blocks = [block for block in all_blocks if block not in simulated_blocks]
+
+    if not unprocessed_blocks:
+        log("No new blocks to simulate.")
+        return
+
+    for block_number in unprocessed_blocks:
+        log(f"Processing block {block_number}...")
+
+        try:
+            block_data, bundles_data = load_existing_block_and_bundles(block_number)
+
+            if bundles_data:
+                # Apply greedy algorithm to select the best bundles
+                max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+
+                selected_bundles = greedy_bundle_selection(bundles_data, max_selected_bundles)
+
+                # Simulate the selected bundles
+                log(f"Simulating bundles for block {block_number}...")
+                simulation_results = simulate_bundles(selected_bundles, web3, block_number)
+
+                # Store the simulation results
+                simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+                log(f"Storing the simulation results for block {block_number}...")
+                store_simulation_results(simulation_results, simulation_output_file)
+
+        except Exception as e:
+            log(f"Error while processing block {block_number}: {e}")
 
 def get_mev_blocker_bundles():
     """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""
@@ -277,13 +324,16 @@ if __name__ == "__main__":
 # Greedy algorithm to select the best bundles
     max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
     log(f"Selecting the best {max_selected_bundles} bundles using the greedy algorithm...")
+
     selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
 
     # Check if simulation is enabled
     simulation_enabled = config['bundle_simulation']['simulation_enabled']
     if simulation_enabled:
         log("Simulating the selected bundles...")
-        simulation_results = simulate_bundles(selected_bundles)
+
+
+        simulation_results = simulate_bundles(selected_bundles, web3, latest_block_number)
 
         # Store the simulation results
         simulation_output_file = os.path.join(data_dir, config['bundle_simulation']['simulation_output_file'])

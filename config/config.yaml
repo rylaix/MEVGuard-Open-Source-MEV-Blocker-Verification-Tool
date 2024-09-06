@@ -1,4 +1,4 @@
-all_mev_blocker_bundle_per_block:   # The Dune query ID used for fetching data
+all_mev_blocker_bundle_per_block:  # The Dune query ID used for fetching data
 
 start_block: null  # Specify the start block manually, or leave as null to infer
 end_block: null  # Specify the end block manually, or leave as null to infer
@@ -14,6 +14,7 @@ abort_on_empty_first_query: false  # Set to false to proceed with the next query
 data_storage:
   data_directory: "data"  # Directory to store block and bundle data
   logs_directory: "logs"  # Directory to store log files
+  simulation_output_directory: simulated_blocks # The foldername which is crucial to see already simulated blocks/bundles
   log_filename: "logfile.log"  # The filename for the log file
 
 # Error Handling and Logging

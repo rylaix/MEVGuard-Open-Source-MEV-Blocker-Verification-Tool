@@ -33,7 +33,6 @@ def update_block_state(web3, transaction_result):
     :param transaction_result: Result of the simulated transaction
     :return: Updated block state
     """
-    # This is a simplified example, detailed state management would require tracking specific changes
     state_diff = transaction_result.get('stateDiff', {})
     return state_diff
 
