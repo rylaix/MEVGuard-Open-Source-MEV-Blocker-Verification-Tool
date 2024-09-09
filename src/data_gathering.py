@@ -11,6 +11,7 @@ from dune_client.types import QueryParameter
 from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
 import yaml
+import requests
 
 from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
 from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
@@ -51,8 +52,11 @@ dune_api_key = os.getenv('DUNE_API_KEY')
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
 
-# Load query ID's
+# Load query ID
 all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
+
+# List to keep track of retried blocks
+retried_blocks = []
 
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
@@ -69,10 +73,38 @@ def convert_to_dict(obj):
         return str(obj)  # Fallback to string representation if any error occurs
 
 def fetch_block_contents(block_number):
-    """Fetch the contents of a block given its number."""
-    block = web3.eth.get_block(block_number, full_transactions=True)
-    log(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
-    return block
+    """Fetch the contents of a block given its number, with optional retry logic for rate-limiting."""
+    retries = config['rate_limit_handling']['max_retries']
+    delay = config['rate_limit_handling']['initial_delay_seconds']
+    exponential_backoff = config['rate_limit_handling']['exponential_backoff']
+    enable_retry = config['rate_limit_handling'].get('enable_retry', True)  # Default to True if not set
+
+    for attempt in range(retries if enable_retry else 1):  # No retries if retry is disabled
+        try:
+            block = web3.eth.get_block(block_number, full_transactions=True)
+            log(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
+            return block
+        except requests.exceptions.HTTPError as err:
+            if err.response.status_code == 429:  # Too Many Requests
+                if enable_retry:
+                    log(f"Rate limit exceeded for block {block_number}, retrying after {delay} seconds... (Attempt {attempt+1}/{retries})")
+                    time.sleep(delay)
+                    if exponential_backoff:
+                        delay *= 2  # Exponential backoff if enabled
+                    # Add the block number to the retried blocks list
+                    if block_number not in retried_blocks:  # Avoid duplicates
+                        retried_blocks.append(block_number)
+                        log(f"Added block {block_number} to retried blocks list.")  # Log as soon as added
+                        log(f"Current retried blocks: {', '.join(map(str, retried_blocks))}")  # Dynamic list logging
+                else:
+                    log(f"Rate limit exceeded for block {block_number}. Skipping retries.")
+                    break
+            else:
+                log(f"Failed to process block {block_number}: {err}")
+                raise
+    log(f"Exceeded retry limit for block {block_number}.")
+    return None
+
 
 def log_discrepancy_and_abort(message):
     """Log an error message and abort the script."""
@@ -274,18 +306,22 @@ def store_data(block, bundles):
     log(f"Stored data for block {block['number']}")
 
 def process_block(block_number, bundles):
-    """Process a single block: fetch, identify bundles, and store data."""
+    """Process a single block: fetch, identify bundles, and store data, with rate-limiting retry handling."""
     try:
         block = fetch_block_contents(block_number)
+        if block is None:
+            log(f"Skipping block {block_number} due to repeated failures.")
+            return
+
         # Here we use the bundles fetched previously
         store_data(block, bundles)
+
     except Exception as e:
         log(f"Failed to process block {block_number}: {e}")
 
 if __name__ == "__main__":
-    # Initialize logging with the log file from config.yaml
-    log_path = os.path.join(logs_dir, log_filename)
-    setup_logging(log_path)
+    # Initialize logging
+    setup_logging()
 
     log("Starting data gathering process...")
 
@@ -318,8 +354,6 @@ if __name__ == "__main__":
     # Use multiprocessing to handle multiple blocks concurrently
     with Pool(processes=cpu_count()) as pool:
         pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
-
-    log("All blocks processed.")
 
 # Greedy algorithm to select the best bundles
     max_selected_bundles = config['bundle_simulation']['max_selected_bundles']

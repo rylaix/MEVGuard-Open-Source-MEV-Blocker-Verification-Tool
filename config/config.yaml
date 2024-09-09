@@ -36,3 +36,11 @@ simulation:
   state_management_enabled: true  # Enable or disable state management during simulation
   trace_call_enabled: true  # Enable or disable trace_callMany for transaction simulation
   trace_output_file: "trace_results.json"  # The filename for storing trace results
+
+# Rate Limiting and Retry Settings (needed only in case of free infura plan or not powerful self-hosted RPC)
+rate_limit_handling:
+  enable_retry: true  # Add this option to enable or disable the retry logic
+  max_retries: 3  # Maximum number of retry attempts for rate-limited requests
+  initial_delay_seconds: 5  # Initial delay before retrying (in seconds)
+  exponential_backoff: true  # Enable or disable exponential backoff for retries
+  # rate_limit_handling can be simplified if needed.
