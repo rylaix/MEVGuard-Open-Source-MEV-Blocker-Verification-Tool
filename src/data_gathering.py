@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from utils import setup_logging, log
+from utils import setup_logging, log, log_error
 from web3 import Web3
 from web3.datastructures import AttributeDict
 from dune_client.client import DuneClient
@@ -82,7 +82,6 @@ def fetch_block_contents(block_number):
     for attempt in range(retries if enable_retry else 1):  # No retries if retry is disabled
         try:
             block = web3.eth.get_block(block_number, full_transactions=True)
-            log(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
             return block
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 429:  # Too Many Requests
@@ -306,18 +305,27 @@ def store_data(block, bundles):
     log(f"Stored data for block {block['number']}")
 
 def process_block(block_number, bundles):
-    """Process a single block: fetch, identify bundles, and store data, with rate-limiting retry handling."""
+    """Process a single block: fetch, simulate, validate, and store data."""
     try:
-        block = fetch_block_contents(block_number)
-        if block is None:
-            log(f"Skipping block {block_number} due to repeated failures.")
-            return
+        # Simulate bundles and store results
+        log(f"Processing block {block_number}...")
+        simulation_results = simulate_bundles(bundles, web3, block_number)
+        simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+        store_simulation_results(simulation_results, simulation_output_file)
 
-        # Here we use the bundles fetched previously
-        store_data(block, bundles)
+        # Verify transaction inclusion
+        for bundle in bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+                else:
+                    log_error(f"Missing transaction hash in block {block_number}")
 
     except Exception as e:
-        log(f"Failed to process block {block_number}: {e}")
+        log_error(f"Error while processing block {block_number}: {e}")
 
 if __name__ == "__main__":
     # Initialize logging
@@ -352,8 +360,12 @@ if __name__ == "__main__":
         block_numbers = [latest_processed_block - i for i in range(num_blocks_to_process)]
 
     # Use multiprocessing to handle multiple blocks concurrently
-    with Pool(processes=cpu_count()) as pool:
-        pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
+    try:
+        with Pool(processes=cpu_count()) as pool:
+            pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
+    except Exception as e:
+        log_error(f"Error during multiprocessing: {e}")
+        exit(1)
 
 # Greedy algorithm to select the best bundles
     max_selected_bundles = config['bundle_simulation']['max_selected_bundles']

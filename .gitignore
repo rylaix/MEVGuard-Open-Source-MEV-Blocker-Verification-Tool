@@ -21,7 +21,8 @@ logs/*
 # Except for __init__.py
 !logs/__init__.py
 
-# Ignore all .json files in the data directory
+# Ignore all .json files in the data and simulated_blocks directories
 data/*.json
+simulated_blocks/*.json
 
 # Additional custom directories or files can be added here, if it will be needed in future development.

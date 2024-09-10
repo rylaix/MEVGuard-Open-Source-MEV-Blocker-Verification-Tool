@@ -60,62 +60,121 @@ def simulate_bundles(selected_bundles, web3, block_number):
             
             if results:
                 # Store the simulation results including refunds and state differences
+                refund = calculate_refund(results)
                 simulation_results.append({
                     'bundle': bundle,
                     'result': results,
-                    'refund': calculate_refund(results)
+                    'refund': refund
                 })
+                log(f"Calculated Refund for bundle: {refund} ETH")
+                
+                # Update blockchain state after simulation
+                update_block_state(web3, results)
+                log(f"Updated state for block {block_number}.")
     
     return simulation_results
+
 
 def calculate_refund(simulation_result):
     """
     Calculate the refund based on the simulation results.
-    This is a placeholder - the actual logic would depend on the results returned from `trace_callMany`.
+    This function calculates 90% of the total backrun value, including gas savings, builder rewards, 
+    priority fees, and any other relevant incentives according to the MEVBlocker rules.
+    
     :param simulation_result: The result from the simulation
-    :return: Calculated refund amount
+    :return: Calculated refund amount (90% of the backrun value)
     """
-    # Assuming the refund is a sum of some values in the stateDiff (simplified)
-    refund = sum(tx['value'] for tx in simulation_result if 'value' in tx)
+    # Initialize total backrun value
+    total_backrun_value = 0
+
+    for tx in simulation_result:
+        # Calculate refund from gas used and effective gas price
+        if 'gas_used' in tx and 'effective_gas_price' in tx:
+            gas_used = tx['gas_used']
+            gas_price = tx['effective_gas_price']
+            gas_refund = gas_used * gas_price
+            total_backrun_value += gas_refund
+            log(f"Gas Refund for tx {tx['hash']}: {gas_refund} ETH")
+
+        # Include builder rewards if specified
+        if 'builder_reward' in tx:
+            builder_reward = tx['builder_reward']
+            total_backrun_value += builder_reward
+            log(f"Builder Reward for tx {tx['hash']}: {builder_reward} ETH")
+
+        # Include priority fees (EIP-1559) might be relevant
+        if 'priority_fee' in tx:
+            priority_fee = tx['priority_fee']
+            total_backrun_value += priority_fee
+            log(f"Priority Fee for tx {tx['hash']}: {priority_fee} ETH")
+
+        # Consider slippage protection if applicable
+        if 'slippage_protection' in tx:
+            slippage_value = tx['slippage_protection']
+            total_backrun_value += slippage_value
+            log(f"Slippage Protection for tx {tx['hash']}: {slippage_value} ETH")
+
+    # Apply the 90% rebate rule
+    refund = total_backrun_value * 0.9
+    log(f"Total Backrun Value: {total_backrun_value} ETH")
+    log(f"Refund (90% of Backrun Value): {refund} ETH")
+
     return refund
+
 
 def simulate_optimal_bundle_combinations(bundles, web3, block_number):
     """
     Simulate all permutations of the bundles to check for violations in the optimal bundle merging rule.
+    This includes combinations of all backruns and checks whether they could have offered more value.
+
     :param bundles: List of all potential bundles
     :param web3: Web3 instance for RPC communication
     :param block_number: The block number to simulate
     :return: Optimal bundle combination and simulation results
     """
-    # Generate all possible permutations of bundles
-    all_combinations = itertools.permutations(bundles)
     optimal_combination = None
     highest_refund = 0
 
-    for combination in all_combinations:
-        transactions = [tx['hash'] for bundle in combination for tx in bundle['transactions']]
-        results = simulate_transaction_bundle(web3, transactions, block_number)
+    # Generate all possible combinations of bundles
+    for r in range(1, len(bundles) + 1):
+        for combination in itertools.combinations(bundles, r):
+            transactions = [tx['hash'] for bundle in combination for tx in bundle['transactions']]
+            results = simulate_transaction_bundle(web3, transactions, block_number)
 
-        if results:
-            refund = calculate_refund(results)
-            if refund > highest_refund:
-                highest_refund = refund
-                optimal_combination = combination
+            if results:
+                refund = calculate_refund(results)
+                if refund > highest_refund:
+                    highest_refund = refund
+                    optimal_combination = combination
 
+    log(f"Optimal Refund: {highest_refund} ETH with {len(optimal_combination)} bundles" if optimal_combination else "No optimal combination found.")
     return optimal_combination, highest_refund
+
 
 def detect_violation(optimal_combination, actual_combination, highest_refund, actual_refund):
     """
     Compare the optimal combination with the actual one and check if a violation occurred.
+    If a violation is detected, log details such as missed rewards or backruns.
+    
     :param optimal_combination: The optimal combination of bundles
     :param actual_combination: The actual combination of bundles
     :param highest_refund: The highest possible refund
     :param actual_refund: The actual refund received
-    :return: Boolean indicating whether a violation occurred
+    :return: Boolean indicating whether a violation occurred, and the amount of the violation
     """
     if highest_refund > actual_refund:
-        return True, highest_refund - actual_refund  # Return violation and difference
+        violation_amount = highest_refund - actual_refund
+        
+        # Log details of the violation
+        missed_bundles = [bundle for bundle in optimal_combination if bundle not in actual_combination]
+        log(f"Violation detected! Optimal refund: {highest_refund} ETH, Actual refund: {actual_refund} ETH")
+        log(f"Missed opportunities: {missed_bundles}. Difference: {violation_amount} ETH")
+        
+        return True, violation_amount
+
+    log("No violation detected.")
     return False, 0
+
 
 def store_simulation_results(simulation_results, output_file):
     """
@@ -125,3 +184,4 @@ def store_simulation_results(simulation_results, output_file):
     """
     with open(output_file, 'w') as f:
         json.dump(simulation_results, f, indent=4)
+
