@@ -10,8 +10,10 @@ from dune_client.query import QueryBase
 from dune_client.types import QueryParameter
 from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
+from alerting.alerting import send_alert
 import yaml
 import requests
+
 
 from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
 from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
@@ -320,12 +322,16 @@ def process_block(block_number, bundles):
                 if tx_hash:
                     included = verify_transaction_inclusion(web3, block_number, tx_hash)
                     if not included:
-                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+                        message = (f"Transaction {tx_hash} not included in block {block_number}")
+                        log_error(message)
+                        send_alert(message)
                 else:
                     log_error(f"Missing transaction hash in block {block_number}")
 
     except Exception as e:
-        log_error(f"Error while processing block {block_number}: {e}")
+        message = (f"Error while processing block {block_number}: {e}")
+        send_alert(message)
+        log_error(message)
 
 if __name__ == "__main__":
     # Initialize logging
@@ -365,6 +371,7 @@ if __name__ == "__main__":
             pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
     except Exception as e:
         log_error(f"Error during multiprocessing: {e}")
+        send_alert(f"Error during multiprocessing: {e}")
         exit(1)
 
 # Greedy algorithm to select the best bundles
