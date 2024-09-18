@@ -1,4 +1,4 @@
-all_mev_blocker_bundle_per_block:  # The Dune query ID used for fetching data
+all_mev_blocker_bundle_per_block: 4065722 # The Dune query ID used for fetching data
 
 start_block: null  # Specify the start block manually, or leave as null to infer
 end_block: null  # Specify the end block manually, or leave as null to infer
