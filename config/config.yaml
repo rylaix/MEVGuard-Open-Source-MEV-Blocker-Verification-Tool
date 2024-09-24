@@ -43,4 +43,5 @@ rate_limit_handling:
   max_retries: 3  # Maximum number of retry attempts for rate-limited requests
   initial_delay_seconds: 5  # Initial delay before retrying (in seconds)
   exponential_backoff: true  # Enable or disable exponential backoff for retries
+  calls_per_minute: 60  # New parameter: maximum number of calls allowed per minute
   # rate_limit_handling can be simplified if needed.
