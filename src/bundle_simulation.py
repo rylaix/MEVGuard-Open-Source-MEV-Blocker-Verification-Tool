@@ -40,7 +40,7 @@ def simulate_bundles(selected_bundles, web3, block_number):
     simulation_results = []
     
     for bundle in selected_bundles:
-        log(f"Simulating bundle: {bundle}")
+        log(f"Simulating bundle ID: {bundle.get('id', 'unknown')} with {len(bundle.get('transactions', []))} transactions.")
         
         # Check if 'transactions' is a string and convert it to a list of dictionaries
         if isinstance(bundle['transactions'], str):
