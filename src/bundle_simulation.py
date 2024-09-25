@@ -29,12 +29,13 @@ def greedy_bundle_selection(bundles, max_selected_bundles):
     # Limit the number of selected bundles
     return selected_bundles[:max_selected_bundles]
 
-def simulate_bundles(selected_bundles, web3, block_number):
+def simulate_bundles(selected_bundles, web3, block_number, block_time):
     """
     Simulate the selected bundles and calculate the refund.
     :param selected_bundles: List of selected bundles
     :param web3: Web3 instance for RPC communication
     :param block_number: Block number for the simulation
+    :param block_time: Timestamp of the block
     :return: List of simulation results with refunds
     """
     simulation_results = []
@@ -55,8 +56,8 @@ def simulate_bundles(selected_bundles, web3, block_number):
         transactions = [tx['hash'] for tx in bundle['transactions'] if 'hash' in tx]
         
         if transactions:
-            # Simulate the transaction bundle
-            results = simulate_transaction_bundle(web3, transactions, block_number)
+            # Simulate the transaction bundle and pass block_time
+            results = simulate_transaction_bundle(web3, transactions, block_number, block_time)
             
             if results:
                 # Store the simulation results including refunds and state differences

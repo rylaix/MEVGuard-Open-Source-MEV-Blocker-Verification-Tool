@@ -267,7 +267,9 @@ def simulate_unprocessed_blocks():
             log(f"Error while processing block {block_number}: {e}")
 
 def get_mev_blocker_bundles():
-    """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""
+    """
+    Prepare and execute Dune Analytics query to get MEV Blocker bundles.
+    """
     # Compare and validate the SQL
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
@@ -292,24 +294,35 @@ def get_mev_blocker_bundles():
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
 
 def store_data(block, bundles):
-    """Store the block and bundles data into the data directory."""
+    """
+    Store the block and bundles data into the data directory.
+    """
     # Convert block to dictionary
     block_dict = convert_to_dict(block)
 
+    # Save block data
     with open(os.path.join(data_dir, f"block_{block['number']}.json"), 'w') as f:
         json.dump(block_dict, f, indent=4)
 
+    # Save bundles data
     with open(os.path.join(data_dir, f"bundles_{block['number']}.json"), 'w') as f:
         json.dump(bundles, f, indent=4)
 
     log(f"Stored data for block {block['number']}")
 
 def process_block(block_number, bundles):
-    """Process a single block: fetch, simulate, validate, and store data."""
+    """
+    Process a single block: fetch, simulate, validate, and store data.
+    """
     try:
-        # Simulate bundles and store results
+        # Load block data and extract block_time
+        block_data, bundles_data = load_existing_block_and_bundles(block_number)
+        block_time = block_data['timestamp']  # Extract block timestamp
+        
         log(f"Processing block {block_number}...")
-        simulation_results = simulate_bundles(bundles, web3, block_number)
+        
+        # Simulate bundles and store results
+        simulation_results = simulate_bundles(bundles, web3, block_number, block_time)
         simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
         store_simulation_results(simulation_results, simulation_output_file)
 
@@ -326,6 +339,7 @@ def process_block(block_number, bundles):
 
     except Exception as e:
         log_error(f"Error while processing block {block_number}: {e}")
+
 
 if __name__ == "__main__":
     # Initialize logging
