@@ -373,15 +373,22 @@ if __name__ == "__main__":
         # Gather a specified number of blocks (e.g., 5)
         block_numbers = [latest_processed_block - i for i in range(num_blocks_to_process)]
 
-    # Use multiprocessing to handle multiple blocks concurrently
-    try:
-        with Pool(processes=cpu_count()) as pool:
-            pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
-    except Exception as e:
-        log_error(f"Error during multiprocessing: {e}")
-        exit(1)
+    # Store block data and bundles before further processing
+    log("Fetching and storing block data and bundles...")
+    for block_number in block_numbers:
+        try:
+            block_data = web3.eth.get_block(block_number, full_transactions=True)
+            log(f"Fetched block data for block {block_number} with {len(block_data['transactions'])} transactions.")
 
-# Greedy algorithm to select the best bundles
+            # Store block data and bundles
+            store_data(block_data, bundles)
+            log(f"Stored block data and bundles for block {block_number}.")
+
+        except Exception as e:
+            log_error(f"Error fetching or storing block data for block {block_number}: {e}")
+            continue
+
+    # Greedy algorithm to select the best bundles
     max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
     log(f"Selecting the best {max_selected_bundles} bundles using the greedy algorithm...")
 
@@ -392,8 +399,9 @@ if __name__ == "__main__":
     if simulation_enabled:
         log("Simulating the selected bundles...")
 
-
-        simulation_results = simulate_bundles(selected_bundles, web3, latest_block_number)
+        # Ensure block time is passed to simulation
+        block_time = block_data.get('timestamp')  # Correctly fetch block time
+        simulation_results = simulate_bundles(selected_bundles, web3, latest_block_number, block_time)
 
         # Store the simulation results
         simulation_output_file = os.path.join(data_dir, config['bundle_simulation']['simulation_output_file'])
