@@ -29,50 +29,119 @@ def greedy_bundle_selection(bundles, max_selected_bundles):
     # Limit the number of selected bundles
     return selected_bundles[:max_selected_bundles]
 
-def simulate_bundles(selected_bundles, web3, block_number, block_time):
+def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_data_folder='data'):
     """
     Simulate the selected bundles and calculate the refund.
     :param selected_bundles: List of selected bundles
     :param web3: Web3 instance for RPC communication
     :param block_number: Block number for the simulation
     :param block_time: Timestamp of the block
+    :param bundle_data_folder: Folder where bundle data files are stored
     :return: List of simulation results with refunds
     """
     simulation_results = []
-    
-    for bundle in selected_bundles:
-        log(f"Simulating bundle ID: {bundle.get('id', 'unknown')} with {len(bundle.get('transactions', []))} transactions.")
-        
-        # Check if 'transactions' is a string and convert it to a list of dictionaries
-        if isinstance(bundle['transactions'], str):
-            try:
-                # Parse the string to JSON
-                bundle['transactions'] = json.loads(bundle['transactions'])
-            except json.JSONDecodeError as e:
-                log(f"Error decoding transactions for bundle: {bundle}. Error: {e}")
-                continue  # Skip this bundle if parsing fails
+    processed_transactions = set()  # Keep track of already processed transactions
+    processed_bundles = set()  # Track processed bundles to avoid infinite loops
 
-        # Now process the transactions as a list of dictionaries
-        transactions = [tx['hash'] for tx in bundle['transactions'] if 'hash' in tx]
-        
-        if transactions:
-            # Simulate the transaction bundle and pass block_time
-            results = simulate_transaction_bundle(web3, transactions, block_number, block_time)
+    # Load bundles from the data folder to ensure proper tracking of bundle IDs/names
+    bundle_file = f"{bundle_data_folder}/bundles_{block_number}.json"
+    try:
+        with open(bundle_file, 'r') as file:
+            loaded_bundles = json.load(file)
+    except Exception as e:
+        log(f"Error loading bundles from {bundle_file}: {e}")
+        return simulation_results
+
+    log(f"Loaded {len(loaded_bundles)} bundles from file {bundle_file}.")
+
+    # Log the current state of loaded bundles
+    log(f"State: processed_bundles: {processed_bundles}, processed_transactions: {processed_transactions}")
+
+    # Map each bundle to its ID or name if available
+    for bundle_index, bundle in enumerate(loaded_bundles):
+        bundle_id = bundle.get('id') or f'bundle_{bundle_index}'
+
+        # Log current bundle being processed
+        log(f"Checking bundle ID: {bundle_id}")
+
+        # Skip already processed bundles to prevent infinite loops
+        if bundle_id in processed_bundles:
+            log(f"Skipping already processed bundle ID: {bundle_id}.")
+            continue
+
+        log(f"Simulating bundle ID: {bundle_id} with {len(bundle.get('transactions', []))} transactions.")
+
+        # Mark bundle as processed to avoid re-simulation
+        processed_bundles.add(bundle_id)
+
+        # Parse and verify the transactions list
+        transactions = bundle.get('transactions', [])
+
+        if not transactions:
+            log(f"No transactions in bundle {bundle_id}, skipping.")
+            continue
+
+        # Track state to check if any new transactions were processed
+        any_new_transactions = False
+
+        for tx in transactions:
+            tx_hash = tx['hash']
             
+            # Log each transaction being processed
+            log(f"Processing transaction {tx_hash} in bundle {bundle_id}.")
+
+            if tx_hash in processed_transactions:
+                log(f"Skipping already processed transaction: {tx_hash}.")
+                continue
+
+            # Mark transaction as processed
+            processed_transactions.add(tx_hash)
+
+            # Check balance of the 'from' address before simulating
+            sufficient_balance = True
+            try:
+                from_address = tx['from']
+                balance = web3.eth.get_balance(from_address, block_number)
+                gas_price = int(tx.get('gasPrice', 0))
+                gas_limit = int(tx.get('gasLimit', 0))
+                value = int(tx.get('value', 0))
+                required_balance = gas_price * gas_limit + value
+
+                if balance < required_balance:
+                    log(f"Skipping transaction {tx['hash']} due to insufficient balance: {balance} < {required_balance}")
+                    sufficient_balance = False
+            except Exception as e:
+                log(f"Error checking balance for transaction {tx_hash}: {e}")
+                sufficient_balance = False
+
+            if not sufficient_balance:
+                log(f"Skipping transaction ID: {tx_hash} due to insufficient balance.")
+                continue
+
+            # Simulate the transaction bundle and pass block_time
+            results = simulate_transaction_bundle(web3, [tx], block_number, block_time)
+
             if results:
-                # Store the simulation results including refunds and state differences
                 refund = calculate_refund(results)
                 simulation_results.append({
                     'bundle': bundle,
+                    'transaction': tx,
                     'result': results,
                     'refund': refund
                 })
-                log(f"Calculated Refund for bundle: {refund} ETH")
-                
+                log(f"Calculated Refund for transaction: {tx_hash} = {refund} ETH")
+
                 # Update blockchain state after simulation
                 update_block_state(web3, results)
-                log(f"Updated state for block {block_number}.")
-    
+                log(f"Updated state for transaction {tx_hash} in block {block_number}.")
+                any_new_transactions = True
+            else:
+                log(f"No results for transaction {tx_hash}, simulation skipped.")
+
+        if not any_new_transactions:
+            log(f"No new transactions processed in bundle {bundle_id}, moving to next.")
+            continue
+
     return simulation_results
 
 

@@ -42,48 +42,66 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
     - block_number: The block number in which the transaction is included
     - block_time: Timestamp of the block for identifying bundles within the correct time window
     """
-    
     trace_calls = []
-    last_call_time = 0  # Track the time of the last RPC call
-    call_interval = 60 / 60  # Limit to one call per second (adjust according to your rate limit)
-    
+
+    # Ensure that transactions have the required fields before adding to trace_calls
     for tx in transactions:
-        # Ensure we have all necessary fields
-        trace_calls.append({
+        # Validate that tx is a dictionary and has the required 'from' field
+        if not isinstance(tx, dict):
+            log(f"Skipping invalid transaction format: {tx}. Expected dictionary, got {type(tx)}.")
+            continue
+        if 'from' not in tx:
+            log(f"Skipping transaction due to missing 'from' field: {tx}.")
+            continue
+
+        # Log transaction details for debugging purposes
+        log(f"Adding transaction {tx.get('hash', 'unknown')} to trace_calls structure with details: {tx}")
+
+        # Construct the trace call object for this transaction
+        trace_call_object = {
             'from': tx['from'],
-            'to': tx['to'],
+            'to': tx.get('to', None),
             'gas': tx.get('gas', None),
             'gasPrice': tx.get('gas_price', None),
             'maxFeePerGas': tx.get('max_fee_per_gas', None),
             'maxPriorityFeePerGas': tx.get('max_priority_fee_per_gas', None),
             'value': tx.get('value', 0),
-            'data': tx.get('calldata', None),
+            'data': tx.get('data', None),
             'nonce': tx.get('nonce', None),
             'chainId': tx.get('chainId', 1),
             'accessList': tx.get('access_list', None)
-        })
+        }
 
+        # Append each trace call as a tuple with the trace object and the trace type in a sequence (e.g., list)
+        trace_calls.append((trace_call_object, ["stateDiff"]))  # Use a list ["stateDiff"] instead of a string
+
+    # Log the final trace_calls structure for debugging
+    log(f"trace_calls structure: {trace_calls}")
+
+    # If trace_calls is empty, log a warning and return
+    if not trace_calls:
+        log("No valid trace calls were constructed. Aborting simulation.")
+        return None
+
+    # Proceed with the simulation if trace_calls is not empty
     for attempt in range(retries):
         try:
             # Rate limit by waiting between requests
-            time_since_last_call = time.time() - last_call_time
-            if time_since_last_call < call_interval:
-                time.sleep(call_interval - time_since_last_call)
+            time.sleep(call_interval)
             
-            # Make the raw RPC call for trace_callMany
-            response = web3.provider.make_request("trace_callMany", [trace_calls, "stateDiff"])
-            last_call_time = time.time()  # Update last call time
+            # The parameters for trace_callMany should be formatted as an array of tuples with the trace type as a sequence: [(trace_call_object, ["stateDiff"])]
+            response = web3.provider.make_request("trace_callMany", [trace_calls])
 
             # Check for errors in the response
             if response.get('error'):
                 log(f"Error in trace_callMany: {response['error']}")
                 return None
-            
+
             # Simulate backruns and update the state after each simulation
             simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
-            
+
             return response.get('result')
-        
+
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:  # Too Many Requests
                 log(f"429 Error: Too Many Requests. Retrying in {backoff_factor ** attempt} seconds...")

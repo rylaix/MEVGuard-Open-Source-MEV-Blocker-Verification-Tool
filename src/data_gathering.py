@@ -295,10 +295,19 @@ def get_mev_blocker_bundles():
 
 def store_data(block, bundles):
     """
-    Store the block and bundles data into the data directory.
+    Store the block and bundles data into the data directory after converting all transactions to dictionary format.
     """
     # Convert block to dictionary
     block_dict = convert_to_dict(block)
+
+    # Ensure that each transaction within bundles is a properly parsed JSON dictionary
+    for bundle in bundles:
+        if isinstance(bundle['transactions'], str):
+            try:
+                bundle['transactions'] = json.loads(bundle['transactions'])  # Parse transactions string into JSON
+            except json.JSONDecodeError as e:
+                log(f"Error decoding transactions for bundle: {bundle}. Error: {e}")
+                continue  # Skip this bundle if parsing fails
 
     # Save block data
     with open(os.path.join(data_dir, f"block_{block['number']}.json"), 'w') as f:
@@ -309,6 +318,7 @@ def store_data(block, bundles):
         json.dump(bundles, f, indent=4)
 
     log(f"Stored data for block {block['number']}")
+
 
 def process_block(block_number, bundles):
     """
