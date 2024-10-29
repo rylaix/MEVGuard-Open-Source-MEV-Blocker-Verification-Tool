@@ -144,13 +144,25 @@ def compare_and_validate_sql(query_id, local_sql):
     return False
 
 def execute_query_and_get_results(query_id, start_block=None, end_block=None):
-    """Execute the query on Dune and get the results."""
+    """
+    Execute the query on Dune and get results while limiting to end_block.
+    """
+    start_block = start_block if start_block is not None else config.get('start_block')
+    end_block = end_block if end_block is not None else config.get('end_block')
+
+    # Ensure start_block does not exceed end_block
+    if start_block > end_block:
+        log("Error: start block exceeds end block. Exiting.")
+        return []
+
     try:
         # Create query parameters
         parameters = [
             QueryParameter.number_type(name="start_block", value=start_block),
             QueryParameter.number_type(name="end_block", value=end_block)
         ]
+
+        log(f"Executing query with start block {start_block} and end block {end_block}.")
 
         # Construct the query object
         query = QueryBase(query_id=query_id, params=parameters)
@@ -190,14 +202,16 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
         return []
 
 def get_latest_processed_block():
-    """Get the latest processed block from the data directory."""
+    """Get the latest processed block while respecting configured start_block if no previous blocks exist."""
     files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
     if not files:
-        log("No processed blocks found, starting from default block range.")
-        return None
+        log("No processed blocks found, using configured start block.")
+        return config.get('start_block')  # Default to start_block from config if files are missing
+
     latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
     latest_block = int(latest_file.split('_')[1].split('.')[0])
-    return latest_block
+    return latest_block if latest_block <= config.get('end_block') else config.get('end_block')
+
 
 def get_simulated_blocks():
     """
@@ -227,31 +241,36 @@ def load_existing_block_and_bundles(block_number):
 
 def simulate_unprocessed_blocks():
     """
-    Simulate all unprocessed (unsimulated) blocks by looking into the `data` directory.
+    Simulate only unprocessed blocks within the start and end block range.
     """
-    # List all blocks saved in the data directory
-    all_blocks = [int(f.split('_')[1].split('.')[0]) for f in os.listdir(data_dir) if f.startswith('block_')]
-    
-    # Get the blocks that have already been simulated
-    simulated_blocks = get_simulated_blocks()
+    start_block = config.get('start_block')
+    end_block = config.get('end_block')
 
-    # Filter out the blocks that have already been simulated
-    unprocessed_blocks = [block for block in all_blocks if block not in simulated_blocks]
+    all_blocks = [
+        int(f.split('_')[1].split('.')[0]) 
+        for f in os.listdir(data_dir) 
+        if f.startswith('block_') and start_block <= int(f.split('_')[1].split('.')[0]) <= end_block
+    ]
+
+    unprocessed_blocks = [block for block in all_blocks if block not in get_simulated_blocks()]
+    unprocessed_blocks.sort()  # Process in ascending order
 
     if not unprocessed_blocks:
-        log("No new blocks to simulate.")
+        log("No new blocks to simulate within the specified range.")
         return
 
     for block_number in unprocessed_blocks:
+        if block_number > end_block:
+            log(f"Reached end block limit {end_block}. Stopping further processing.")
+            break  # Exit if beyond the end_block
+
         log(f"Processing block {block_number}...")
 
         try:
             block_data, bundles_data = load_existing_block_and_bundles(block_number)
 
             if bundles_data:
-                # Apply greedy algorithm to select the best bundles
                 max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
-
                 selected_bundles = greedy_bundle_selection(bundles_data, max_selected_bundles)
 
                 # Simulate the selected bundles
@@ -266,32 +285,27 @@ def simulate_unprocessed_blocks():
         except Exception as e:
             log(f"Error while processing block {block_number}: {e}")
 
+
 def get_mev_blocker_bundles():
     """
-    Prepare and execute Dune Analytics query to get MEV Blocker bundles.
+    Execute Dune Analytics query to get MEV Blocker bundles for the configured block range.
     """
-    # Compare and validate the SQL
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
-    # Get the latest block number from the blockchain
-    latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 10)
-
-    # Determine start_block and end_block
+    # Prioritize configuration-defined block range
     start_block = config.get('start_block')
-    if start_block is None or start_block <= 0:
-        latest_processed_block = get_latest_processed_block()
-        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
-
     end_block = config.get('end_block')
-    if end_block is None or end_block <= 0:
-        end_block = latest_block_number - int(block_delay_seconds // 12)
 
-    log(f"Start block: {start_block}, End block: {end_block}")
+    # Ensure only the configured range is used
+    if start_block is None or end_block is None:
+        log("Error: start_block or end_block not defined in configuration.")
+        return []
 
-    # Execute the query and get results
+    log(f"Using configured start block: {start_block}, end block: {end_block}")
+
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
+
 
 def store_data(block, bundles):
     """
@@ -370,22 +384,36 @@ if __name__ == "__main__":
         else:
             log("No bundles retrieved. Proceeding to the next query...")
 
-    # Determine the number of blocks to process
+    # Determine the number of blocks to process, respecting the end_block
     latest_block_number = web3.eth.block_number
-    latest_processed_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+    start_block = config.get('start_block')
+    end_block = config.get('end_block')
+    latest_processed_block = get_latest_processed_block() or start_block
 
-    # Check if `num_blocks_to_process` is set to "all"
+    # Apply the `end_block` as an upper boundary
+    if latest_processed_block > end_block:
+        log(f"Latest processed block {latest_processed_block} exceeds the specified end block {end_block}.")
+        exit(1)
+
+    # Generate block numbers up to `end_block`
     num_blocks_to_process = config.get('num_blocks_to_process', 5)
     if num_blocks_to_process == "all":
-        # Gather all blocks from the latest processed block to the latest block on the blockchain
-        block_numbers = list(range(latest_processed_block, latest_block_number + 1))
+        # Gather all blocks from latest_processed_block up to end_block
+        block_numbers = list(range(latest_processed_block, end_block + 1))
     else:
-        # Gather a specified number of blocks (e.g., 5)
-        block_numbers = [latest_processed_block - i for i in range(num_blocks_to_process)]
+        # Gather the specified number of blocks, ensuring we do not exceed `end_block`
+        block_numbers = [
+            block for block in range(latest_processed_block, latest_processed_block + num_blocks_to_process)
+            if block <= end_block
+        ]
 
     # Store block data and bundles before further processing
     log("Fetching and storing block data and bundles...")
     for block_number in block_numbers:
+        if block_number > end_block:
+            log(f"Reached end block limit {end_block}. Stopping further processing.")
+            break  # Stop if we reach beyond end_block
+
         try:
             block_data = web3.eth.get_block(block_number, full_transactions=True)
             log(f"Fetched block data for block {block_number} with {len(block_data['transactions'])} transactions.")
@@ -411,7 +439,7 @@ if __name__ == "__main__":
 
         # Ensure block time is passed to simulation
         block_time = block_data.get('timestamp')  # Correctly fetch block time
-        simulation_results = simulate_bundles(selected_bundles, web3, latest_block_number, block_time)
+        simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
 
         # Store the simulation results
         simulation_output_file = os.path.join(data_dir, config['bundle_simulation']['simulation_output_file'])
@@ -419,3 +447,4 @@ if __name__ == "__main__":
         store_simulation_results(simulation_results, simulation_output_file)
 
     log("All tasks for this phase completed successfully.")
+
