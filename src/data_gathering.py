@@ -12,10 +12,14 @@ from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
 import yaml
 import requests
+import sqlite3
 
 from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
 from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
+from db.database_initializer import initialize_or_verify_database, load_config
 
+# Initialize the database tables before any further operations
+initialize_or_verify_database()
 
 # Load environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -81,7 +85,10 @@ def fetch_block_contents(block_number):
 
     for attempt in range(retries if enable_retry else 1):  # No retries if retry is disabled
         try:
+            # Fetch the block data
             block = web3.eth.get_block(block_number, full_transactions=True)
+
+
             return block
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 429:  # Too Many Requests
@@ -203,14 +210,20 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
 
 def get_latest_processed_block():
     """Get the latest processed block while respecting configured start_block if no previous blocks exist."""
-    files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
-    if not files:
-        log("No processed blocks found, using configured start block.")
-        return config.get('start_block')  # Default to start_block from config if files are missing
-
-    latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
-    latest_block = int(latest_file.split('_')[1].split('.')[0])
-    return latest_block if latest_block <= config.get('end_block') else config.get('end_block')
+    conn = sqlite3.connect('../../mevguard_tracking.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT MAX(block_number) FROM block_data")
+        latest_processed_block = cursor.fetchone()[0]
+        if latest_processed_block is None:
+            log("No processed blocks found in the database, using configured start block.")
+            return config.get('start_block')
+        return latest_processed_block
+    except sqlite3.Error as e:
+        log_error(f"Error querying the latest processed block: {e}")
+        return config.get('start_block')
+    finally:
+        conn.close()
 
 
 def get_simulated_blocks():
@@ -306,32 +319,77 @@ def get_mev_blocker_bundles():
 
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
 
-
 def store_data(block, bundles):
     """
     Store the block and bundles data into the data directory after converting all transactions to dictionary format.
     """
-    # Convert block to dictionary
-    block_dict = convert_to_dict(block)
+    block_number = block['number']
+    
+    # Load configuration to get the database path
+    config = load_config()
 
-    # Ensure that each transaction within bundles is a properly parsed JSON dictionary
-    for bundle in bundles:
-        if isinstance(bundle['transactions'], str):
-            try:
-                bundle['transactions'] = json.loads(bundle['transactions'])  # Parse transactions string into JSON
-            except json.JSONDecodeError as e:
-                log(f"Error decoding transactions for bundle: {bundle}. Error: {e}")
-                continue  # Skip this bundle if parsing fails
+    # Construct the path to the database file
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(base_dir, '..', config['data_storage']['database_file'])
+    db_path = os.path.abspath(db_path)  # Convert to absolute path
+    
+    try:
+        # Establish a connection to the SQLite database
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+                # Print out the entire database for debugging purposes
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        log(f"Database Tables: {tables}")
 
-    # Save block data
-    with open(os.path.join(data_dir, f"block_{block['number']}.json"), 'w') as f:
-        json.dump(block_dict, f, indent=4)
+        # Convert block to dictionary for JSON storage
+        block_dict = convert_to_dict(block)
 
-    # Save bundles data
-    with open(os.path.join(data_dir, f"bundles_{block['number']}.json"), 'w') as f:
-        json.dump(bundles, f, indent=4)
+        # Ensure that each transaction within bundles is a properly parsed JSON dictionary
+        for bundle in bundles:
+            if isinstance(bundle['transactions'], str):
+                try:
+                    bundle['transactions'] = json.loads(bundle['transactions'])
+                except json.JSONDecodeError as e:
+                    log(f"Error decoding transactions for bundle: {bundle}. Error: {e}")
+                    continue  # Skip this bundle if parsing fails
 
-    log(f"Stored data for block {block['number']}")
+        # Save block data to JSON file
+        block_file_path = os.path.join(config['data_storage']['data_directory'], f"block_{block_number}.json")
+        with open(block_file_path, 'w') as block_f:
+            json.dump(block_dict, block_f, indent=4)
+
+        # Save bundles data to JSON file
+        bundles_file_path = os.path.join(config['data_storage']['data_directory'], f"bundles_{block_number}.json")
+        with open(bundles_file_path, 'w') as bundles_f:
+            json.dump(bundles, bundles_f, indent=4)
+
+        log(f"Stored data for block {block_number}")
+
+        # Update the tracking database for the block data
+        cursor.execute("INSERT OR REPLACE INTO block_data (block_number, transaction_count) VALUES (?, ?)",
+                       (block_number, len(block['transactions'])))
+        conn.commit()
+
+        # Print out the entire database for debugging purposes
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        log(f"Database Tables: {tables}")
+
+        for table_name, in tables:
+            cursor.execute(f"SELECT * FROM {table_name};")
+            rows = cursor.fetchall()
+            log(f"Table: {table_name}, Rows: {rows}")
+
+    except sqlite3.Error as e:
+        log_error(f"Error storing data for block {block_number} into the database: {e}")
+
+    except Exception as e:
+        log_error(f"Unexpected error in store_data function for block {block_number}: {e}")
+
+    finally:
+        # Ensure the connection is closed
+        conn.close()
 
 
 def process_block(block_number, bundles):
@@ -418,9 +476,12 @@ if __name__ == "__main__":
             block_data = web3.eth.get_block(block_number, full_transactions=True)
             log(f"Fetched block data for block {block_number} with {len(block_data['transactions'])} transactions.")
 
-            # Store block data and bundles
-            store_data(block_data, bundles)
-            log(f"Stored block data and bundles for block {block_number}.")
+            # Filter or associate bundles to the specific block
+            relevant_bundles = [bundle for bundle in bundles if bundle['block_number'] == block_number]
+
+            # Store block data and relevant bundles immediately after fetching
+            store_data(block_data, relevant_bundles)
+            log(f"Stored block data and associated bundles for block {block_number}.")
 
         except Exception as e:
             log_error(f"Error fetching or storing block data for block {block_number}: {e}")
@@ -430,6 +491,7 @@ if __name__ == "__main__":
     max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
     log(f"Selecting the best {max_selected_bundles} bundles using the greedy algorithm...")
 
+    # Since bundles might have been filtered earlier, update selected bundles
     selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
 
     # Check if simulation is enabled
@@ -437,14 +499,22 @@ if __name__ == "__main__":
     if simulation_enabled:
         log("Simulating the selected bundles...")
 
-        # Ensure block time is passed to simulation
-        block_time = block_data.get('timestamp')  # Correctly fetch block time
-        simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
+        for block_number in block_numbers:
+            try:
+                # Ensure block data is available
+                block_data = web3.eth.get_block(block_number, full_transactions=True)
+                block_time = block_data.get('timestamp')  # Correctly fetch block time
+                
+                # Simulate the selected bundles for the block
+                simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
 
-        # Store the simulation results
-        simulation_output_file = os.path.join(data_dir, config['bundle_simulation']['simulation_output_file'])
-        log(f"Storing the simulation results to {simulation_output_file}...")
-        store_simulation_results(simulation_results, simulation_output_file)
+                # Store the simulation results
+                simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+                log(f"Storing the simulation results to {simulation_output_file}...")
+                store_simulation_results(simulation_results, simulation_output_file)
+
+            except Exception as e:
+                log_error(f"Error simulating bundles for block {block_number}: {e}")
+                continue
 
     log("All tasks for this phase completed successfully.")
-

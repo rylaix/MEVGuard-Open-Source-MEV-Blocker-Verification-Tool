@@ -1,10 +1,11 @@
-from web3 import Web3
-from dotenv import load_dotenv
-from utils import log
 import os
 import time
-import requests
+import sqlite3
 import yaml
+from web3 import Web3
+from dotenv import load_dotenv
+from utils import log, log_error
+import requests
 
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 with open(config_path, 'r') as file:
@@ -43,6 +44,10 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
     - block_time: Timestamp of the block for identifying bundles within the correct time window
     """
     trace_calls = []
+
+    # Establish SQLite connection
+    conn = sqlite3.connect('../../mevguard_tracking.db')
+    cursor = conn.cursor()
 
     # Ensure that transactions have the required fields before adding to trace_calls
     for tx in transactions:
@@ -97,6 +102,14 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
                 log(f"Error in trace_callMany: {response['error']}")
                 return None
 
+            # Record each transaction being simulated in the SQLite database
+            for tx in transactions:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
+                                   (tx_hash, block_number, "simulated"))
+                    conn.commit()
+
             # Simulate backruns and update the state after each simulation
             simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
 
@@ -108,7 +121,10 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
                 time.sleep(backoff_factor ** attempt)
             else:
                 raise e
+        except Exception as e:
+            log_error(f"Unexpected error during transaction bundle simulation: {e}")
 
+    conn.close()
     return None
 
 
@@ -121,6 +137,9 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
     - block_number: The block number in which the transaction is included
     - block_time: Timestamp of the block
     """
+    # Establish SQLite connection
+    conn = sqlite3.connect('../../mevguard_tracking.db')
+    cursor = conn.cursor()
     
     log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
     
@@ -134,8 +153,14 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
         # Update state management with backrun result
         if backrun_result:
             update_block_state(web3, backrun_result)
+            # Log backrun simulation status in SQLite
+            cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
+                           (tx['hash'], block_number, "backrun_simulated"))
+            conn.commit()
         else:
             log(f"Failed to simulate backrun for transaction {tx['hash']}")
+
+    conn.close()
 
 def update_block_state(web3, transaction_result):
     """
@@ -145,6 +170,7 @@ def update_block_state(web3, transaction_result):
     :return: Updated block state
     """
     state_diff = transaction_result.get('stateDiff', {})
+    # TODO: Store state_diff in SQLite if needed for future state analysis
     return state_diff
 
 def verify_transaction_inclusion(web3, block_number, transaction_hash):

@@ -2,8 +2,14 @@ import os
 import yaml
 import json
 import itertools
+import sqlite3
 from utils import setup_logging, log
 from state_management import simulate_transaction_bundle, verify_transaction_inclusion, update_block_state
+
+from db.database_initializer import initialize_or_verify_database
+
+# Initialize the database tables before any further operations
+initialize_or_verify_database()
 
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 with open(config_path, 'r') as file:
@@ -11,6 +17,11 @@ with open(config_path, 'r') as file:
 
 logs_dir = config['data_storage']['logs_directory']
 log_filename = config['data_storage']['log_filename']
+
+# Correct the path to the database file by using absolute paths and ensure it's pointing to the right location.
+base_dir = os.path.dirname(os.path.abspath(__file__))
+db_path = os.path.join(base_dir, '..', config['data_storage']['database_file'])
+db_path = os.path.abspath(db_path)  # Convert to an absolute path
 
 def greedy_bundle_selection(bundles, max_selected_bundles):
     """
@@ -39,6 +50,9 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     :param bundle_data_folder: Folder where bundle data files are stored
     :return: List of simulation results with refunds
     """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
     simulation_results = []
     processed_transactions = set()  # Keep track of already processed transactions
     processed_bundles = set()  # Track processed bundles to avoid infinite loops
@@ -49,99 +63,157 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
         with open(bundle_file, 'r') as file:
             loaded_bundles = json.load(file)
     except Exception as e:
-        log(f"Error loading bundles from {bundle_file}: {e}")
+        log(f"[ERROR] Error loading bundles from {bundle_file}: {e}")
         return simulation_results
 
-    log(f"Loaded {len(loaded_bundles)} bundles from file {bundle_file}.")
+    log(f"[INFO] Loaded {len(loaded_bundles)} bundles from file {bundle_file}.")
 
-    # Log the current state of loaded bundles
-    log(f"State: processed_bundles: {processed_bundles}, processed_transactions: {processed_transactions}")
-
-    # Map each bundle to its ID or name if available
     for bundle_index, bundle in enumerate(loaded_bundles):
         bundle_id = bundle.get('id') or f'bundle_{bundle_index}'
 
-        # Log current bundle being processed
-        log(f"Checking bundle ID: {bundle_id}")
+        log(f"[DEBUG] Processing bundle ID: {bundle_id}")
 
-        # Skip already processed bundles to prevent infinite loops
-        if bundle_id in processed_bundles:
-            log(f"Skipping already processed bundle ID: {bundle_id}.")
+        # Skip already processed bundles
+        cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id=?", (bundle_id,))
+        bundle_status = cursor.fetchone()
+        if bundle_status is not None:
+            log(f"[DEBUG] Skipping already processed bundle ID: {bundle_id}.")
             continue
 
-        log(f"Simulating bundle ID: {bundle_id} with {len(bundle.get('transactions', []))} transactions.")
-
-        # Mark bundle as processed to avoid re-simulation
         processed_bundles.add(bundle_id)
 
-        # Parse and verify the transactions list
+        # Get transactions from bundle
         transactions = bundle.get('transactions', [])
-
         if not transactions:
-            log(f"No transactions in bundle {bundle_id}, skipping.")
+            log(f"[INFO] No transactions in bundle {bundle_id}, skipping.")
             continue
 
-        # Track state to check if any new transactions were processed
         any_new_transactions = False
 
         for tx in transactions:
-            tx_hash = tx['hash']
-            
-            # Log each transaction being processed
-            log(f"Processing transaction {tx_hash} in bundle {bundle_id}.")
-
-            if tx_hash in processed_transactions:
-                log(f"Skipping already processed transaction: {tx_hash}.")
+            tx_hash = tx.get('hash')
+            if not tx_hash:
+                log(f"[WARNING] Skipping transaction due to missing hash: {tx}")
                 continue
 
-            # Mark transaction as processed
+            log(f"[DEBUG] Checking transaction hash: {tx_hash}")
+
+            # Skip already processed transactions
+            cursor.execute("SELECT status FROM processed_transactions WHERE tx_hash=?", (tx_hash,))
+            tx_status = cursor.fetchone()
+            if tx_status is not None:
+                log(f"[DEBUG] Skipping already processed transaction: {tx_hash}")
+                continue
+
             processed_transactions.add(tx_hash)
 
-            # Check balance of the 'from' address before simulating
+            # Check balance of the 'from' address
             sufficient_balance = True
             try:
-                from_address = tx['from']
-                balance = web3.eth.get_balance(from_address, block_number)
-                gas_price = int(tx.get('gasPrice', 0))
-                gas_limit = int(tx.get('gasLimit', 0))
-                value = int(tx.get('value', 0))
-                required_balance = gas_price * gas_limit + value
+                from_address = tx.get('from')
+                if not from_address:
+                    log(f"[WARNING] Skipping transaction {tx_hash} due to missing 'from' address.")
+                    continue
 
-                if balance < required_balance:
-                    log(f"Skipping transaction {tx['hash']} due to insufficient balance: {balance} < {required_balance}")
+                # Fetch the balance of the sender's address
+                balance = web3.eth.get_balance(from_address, block_identifier=block_number)
+
+                log(f"[DEBUG] Raw balance for address {from_address} at block {block_number}: {balance} (type: {type(balance)})")
+
+                # Handle None balance case and ensure it's an integer
+                if balance is None or not isinstance(balance, int):
+                    log(f"[ERROR] Invalid balance for address {from_address}, skipping transaction {tx_hash}.")
                     sufficient_balance = False
+                    continue
+
+                # Convert necessary transaction parameters to integers
+                try:
+                    gas_price = int(tx.get('maxFeePerGas', 0))
+                    gas_limit = int(tx.get('gasLimit', 0))
+                    value = int(tx.get('value', 0))
+                except (ValueError, TypeError) as e:
+                    log(f"[ERROR] Error converting transaction parameters for {tx_hash}: {e}")
+                    continue
+
+                # Calculate the required balance for this transaction
+                required_balance = gas_price * gas_limit + value
+                log(f"[DEBUG] Required balance for transaction {tx_hash}: {required_balance} Wei")
+
+                if sufficient_balance and balance < required_balance:
+                    log(f"[INFO] Skipping transaction {tx_hash} due to insufficient balance: {balance} < {required_balance}")
+                    sufficient_balance = False
+
             except Exception as e:
-                log(f"Error checking balance for transaction {tx_hash}: {e}")
+                log(f"[ERROR] Error checking balance for transaction {tx_hash}: {e}.")
                 sufficient_balance = False
 
             if not sufficient_balance:
-                log(f"Skipping transaction ID: {tx_hash} due to insufficient balance.")
+                log(f"[INFO] Skipping transaction ID: {tx_hash} due to insufficient balance.")
                 continue
 
-            # Simulate the transaction bundle and pass block_time
-            results = simulate_transaction_bundle(web3, [tx], block_number, block_time)
+            # Simulate the transaction bundle
+            try:
+                log(f"[DEBUG] Simulating transaction bundle for transaction {tx_hash}")
+                results = simulate_transaction_bundle(web3, [tx], block_number, block_time)
+
+                if results is None:
+                    log(f"[WARNING] No results returned for transaction {tx_hash}. Simulation might have failed or returned empty.")
+                    continue
+
+            except Exception as e:
+                log(f"[ERROR] Error simulating transaction bundle for transaction {tx_hash}: {e}")
+                continue
 
             if results:
-                refund = calculate_refund(results)
-                simulation_results.append({
-                    'bundle': bundle,
-                    'transaction': tx,
-                    'result': results,
-                    'refund': refund
-                })
-                log(f"Calculated Refund for transaction: {tx_hash} = {refund} ETH")
+                try:
+                    refund = calculate_refund(results)
+                    simulation_results.append({
+                        'bundle': bundle,
+                        'transaction': tx,
+                        'result': results,
+                        'refund': refund
+                    })
+                    log(f"[INFO] Calculated Refund for transaction {tx_hash} = {refund} ETH")
+
+                    # Save successful simulation to the output directory
+                    simulation_output_directory = config['data_storage']['simulation_output_directory']
+                    if not os.path.exists(simulation_output_directory):
+                        os.makedirs(simulation_output_directory)
+
+                    output_file_path = os.path.join(simulation_output_directory, f"simulation_results_{block_number}.json")
+                    with open(output_file_path, 'w') as output_file:
+                        json.dump(simulation_results, output_file, indent=4)
+                    log(f"[INFO] Successfully saved simulation results for transaction {tx_hash} to {output_file_path}")
+
+                    # Insert transaction record into SQLite
+                    cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
+                                   (tx_hash, bundle_id, block_number, "simulated"))
+                    conn.commit()
+
+                except Exception as e:
+                    log(f"[ERROR] Error calculating refund for transaction {tx_hash}: {e}")
+                    continue
 
                 # Update blockchain state after simulation
-                update_block_state(web3, results)
-                log(f"Updated state for transaction {tx_hash} in block {block_number}.")
+                try:
+                    update_block_state(web3, results)
+                    log(f"[INFO] Updated state for transaction {tx_hash} in block {block_number}.")
+                except Exception as e:
+                    log(f"[ERROR] Error updating state for transaction {tx_hash}: {e}")
+                    continue
+
                 any_new_transactions = True
             else:
-                log(f"No results for transaction {tx_hash}, simulation skipped.")
+                log(f"[INFO] No results for transaction {tx_hash}, simulation skipped.")
 
-        if not any_new_transactions:
-            log(f"No new transactions processed in bundle {bundle_id}, moving to next.")
-            continue
+        # Update bundle status in SQLite if new transactions were processed
+        if any_new_transactions:
+            cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status) VALUES (?, ?, ?)",
+                           (bundle_id, block_number, "processed"))
+            conn.commit()
 
+    log(f"[INFO] Finished simulating bundles for block {block_number}")
+    conn.close()
     return simulation_results
 
 
@@ -164,32 +236,33 @@ def calculate_refund(simulation_result):
             gas_price = tx['effective_gas_price']
             gas_refund = gas_used * gas_price
             total_backrun_value += gas_refund
-            log(f"Gas Refund for tx {tx['hash']}: {gas_refund} ETH")
+            log(f"[DEBUG] Gas Refund for tx {tx['hash']}: {gas_refund} Wei")
 
         # Include builder rewards if specified
         if 'builder_reward' in tx:
             builder_reward = tx['builder_reward']
             total_backrun_value += builder_reward
-            log(f"Builder Reward for tx {tx['hash']}: {builder_reward} ETH")
+            log(f"[DEBUG] Builder Reward for tx {tx['hash']}: {builder_reward} Wei")
 
-        # Include priority fees (EIP-1559) might be relevant
+        # Include priority fees (EIP-1559) if relevant
         if 'priority_fee' in tx:
             priority_fee = tx['priority_fee']
             total_backrun_value += priority_fee
-            log(f"Priority Fee for tx {tx['hash']}: {priority_fee} ETH")
+            log(f"[DEBUG] Priority Fee for tx {tx['hash']}: {priority_fee} Wei")
 
         # Consider slippage protection if applicable
         if 'slippage_protection' in tx:
             slippage_value = tx['slippage_protection']
             total_backrun_value += slippage_value
-            log(f"Slippage Protection for tx {tx['hash']}: {slippage_value} ETH")
+            log(f"[DEBUG] Slippage Protection for tx {tx['hash']}: {slippage_value} Wei")
 
     # Apply the 90% rebate rule
     refund = total_backrun_value * 0.9
-    log(f"Total Backrun Value: {total_backrun_value} ETH")
-    log(f"Refund (90% of Backrun Value): {refund} ETH")
+    log(f"[INFO] Total Backrun Value: {total_backrun_value} Wei")
+    log(f"[INFO] Refund (90% of Backrun Value): {refund} Wei")
 
     return refund
+
 
 
 def simulate_optimal_bundle_combinations(bundles, web3, block_number):

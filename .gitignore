@@ -25,4 +25,7 @@ logs/*
 data/*.json
 simulated_blocks/*.json
 
+# DB's
+*.db
+
 # Additional custom directories or files can be added here, if it will be needed in future development.

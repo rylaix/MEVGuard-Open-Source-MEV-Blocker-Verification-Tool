@@ -1,7 +1,7 @@
 all_mev_blocker_bundle_per_block: 4086593 # The Dune query ID used for fetching data
 
-start_block: null  # Specify the start block manually, or leave as null to infer
-end_block: null  # Specify the end block manually, or leave as null to infer
+start_block: 21012458   # Specify the start block manually, or leave as null to infer
+end_block: 21012468    # Specify the end block manually, or leave as null to infer
 polling_rate_seconds: 10  # Polling interval in seconds to check the status of the Dune query
 block_delay_seconds: 10  # Delay in seconds to ensure data availability for the end block
 
@@ -14,8 +14,9 @@ abort_on_empty_first_query: false  # Set to false to proceed with the next query
 data_storage:
   data_directory: "data"  # Directory to store block and bundle data
   logs_directory: "logs"  # Directory to store log files
-  simulation_output_directory: simulated_blocks # The foldername which is crucial to see already simulated blocks/bundles
+  simulation_output_directory: "simulated_blocks" # The foldername which is crucial to see already simulated blocks/bundles
   log_filename: "logfile.log"  # The filename for the log file
+  database_file: "mevguard_tracking.db"
 
 # Error Handling and Logging
 error_handling:
