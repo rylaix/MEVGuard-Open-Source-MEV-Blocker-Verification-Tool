@@ -17,6 +17,7 @@ import sqlite3
 from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
 from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
 from db.database_initializer import initialize_or_verify_database, load_config
+from db.db_utils import connect_to_database
 
 # Initialize the database tables before any further operations
 initialize_or_verify_database()
@@ -327,15 +328,10 @@ def store_data(block, bundles):
     
     # Load configuration to get the database path
     config = load_config()
-
-    # Construct the path to the database file
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.join(base_dir, '..', config['data_storage']['database_file'])
-    db_path = os.path.abspath(db_path)  # Convert to absolute path
     
     try:
         # Establish a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
+        conn = connect_to_database()
         cursor = conn.cursor()
                 # Print out the entire database for debugging purposes
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")

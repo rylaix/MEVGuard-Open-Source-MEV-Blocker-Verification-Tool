@@ -4,6 +4,7 @@ import json
 import itertools
 import sqlite3
 from utils import setup_logging, log
+from db.db_utils import connect_to_database
 from state_management import simulate_transaction_bundle, verify_transaction_inclusion, update_block_state
 
 from db.database_initializer import initialize_or_verify_database
@@ -18,10 +19,6 @@ with open(config_path, 'r') as file:
 logs_dir = config['data_storage']['logs_directory']
 log_filename = config['data_storage']['log_filename']
 
-# Correct the path to the database file by using absolute paths and ensure it's pointing to the right location.
-base_dir = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(base_dir, '..', config['data_storage']['database_file'])
-db_path = os.path.abspath(db_path)  # Convert to an absolute path
 
 def greedy_bundle_selection(bundles, max_selected_bundles):
     """
@@ -50,7 +47,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     :param bundle_data_folder: Folder where bundle data files are stored
     :return: List of simulation results with refunds
     """
-    conn = sqlite3.connect(db_path)
+    conn = connect_to_database()
     cursor = conn.cursor()
 
     simulation_results = []

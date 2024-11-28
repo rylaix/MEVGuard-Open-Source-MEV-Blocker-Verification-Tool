@@ -4,12 +4,13 @@ import sqlite3
 import yaml
 from web3 import Web3
 from dotenv import load_dotenv
-from utils import log, log_error
+from utils import log, log_error, load_config
+from db.db_utils import connect_to_database
 import requests
 
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 with open(config_path, 'r') as file:
-    config = yaml.safe_load(file)
+    config = load_config
 
 # Load rate limit settings from config.yaml
 calls_per_minute = config['rate_limit_handling'].get('calls_per_minute', 60)
@@ -46,7 +47,7 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
     trace_calls = []
 
     # Establish SQLite connection
-    conn = sqlite3.connect('../../mevguard_tracking.db')
+    conn = connect_to_database()
     cursor = conn.cursor()
 
     # Ensure that transactions have the required fields before adding to trace_calls
@@ -138,7 +139,7 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
     - block_time: Timestamp of the block
     """
     # Establish SQLite connection
-    conn = sqlite3.connect('../../mevguard_tracking.db')
+    conn = connect_to_database()
     cursor = conn.cursor()
     
     log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
