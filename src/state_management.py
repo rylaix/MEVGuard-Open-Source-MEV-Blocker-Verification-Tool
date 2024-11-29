@@ -10,7 +10,7 @@ import requests
 
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 with open(config_path, 'r') as file:
-    config = load_config
+    config = yaml.safe_load(file)
 
 # Load rate limit settings from config.yaml
 calls_per_minute = config['rate_limit_handling'].get('calls_per_minute', 60)
