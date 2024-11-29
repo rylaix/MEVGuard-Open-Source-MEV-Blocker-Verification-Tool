@@ -107,12 +107,19 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
             for tx in transactions:
                 tx_hash = tx.get('hash')
                 if tx_hash:
-                    cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
-                                   (tx_hash, block_number, "simulated"))
+                    cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
+                                   (tx_hash, tx.get('bundle_id', 'unknown'), block_number, "simulated"))
                     conn.commit()
 
-            # Simulate backruns and update the state after each simulation
-            simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
+            # Update the state after successful simulation
+            update_block_state(web3, response.get('result'))
+
+            # Mark the bundle as successfully processed in the database
+            for tx in transactions:
+                bundle_id = tx.get('bundle_id', 'unknown')
+                cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, processed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                               (bundle_id, block_number, "success"))
+                conn.commit()
 
             return response.get('result')
 
@@ -127,6 +134,7 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
 
     conn.close()
     return None
+
 
 
 def simulate_backruns_and_update_state(web3, transactions, block_number, block_time):
@@ -163,16 +171,35 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
 
     conn.close()
 
-def update_block_state(web3, transaction_result):
+def update_block_state(web3, transaction_results):
     """
     Update the blockchain state after a successful transaction simulation.
     :param web3: Web3 instance connected to the RPC node
-    :param transaction_result: Result of the simulated transaction
+    :param transaction_results: Result of the simulated transactions
     :return: Updated block state
     """
-    state_diff = transaction_result.get('stateDiff', {})
-    # TODO: Store state_diff in SQLite if needed for future state analysis
-    return state_diff
+    if not transaction_results:
+        log("No transaction results provided for state update. Aborting.")
+        return
+
+    # Establish SQLite connection
+    conn = connect_to_database()
+    cursor = conn.cursor()
+    
+    for result in transaction_results:
+        state_diff = result.get('stateDiff', {})
+        tx_hash = result.get('transactionHash')
+
+        if state_diff:
+            # Store state_diff in the processed_bundles table if needed for future state analysis
+            cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, processed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                           (tx_hash, result.get('blockNumber'), "success"))
+            conn.commit()
+            log(f"[INFO] Updated state for transaction {tx_hash} in block {result.get('blockNumber')}. StateDiff stored in database.")
+        else:
+            log(f"[WARNING] No stateDiff available for transaction {tx_hash}. Skipping state update.")
+
+    conn.close()
 
 def verify_transaction_inclusion(web3, block_number, transaction_hash):
     """
