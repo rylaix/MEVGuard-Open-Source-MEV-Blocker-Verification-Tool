@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 from utils import log, log_error, load_config
 from db.db_utils import connect_to_database
 import requests
+from multiprocessing import Pool, cpu_count, Manager
+import threading
+import msgpack  # Faster serialization alternative to JSON
 
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 with open(config_path, 'r') as file:
@@ -15,6 +18,11 @@ with open(config_path, 'r') as file:
 # Load rate limit settings from config.yaml
 calls_per_minute = config['rate_limit_handling'].get('calls_per_minute', 60)
 call_interval = 60 / calls_per_minute  # Time interval between each call in seconds
+use_multiprocessing = config['performance_tuning'].get('use_multiprocessing', False)
+max_processes = config['performance_tuning'].get('max_processes', 'auto')
+
+if max_processes == 'auto':
+    max_processes = cpu_count()
 
 def initialize_web3():
     """
@@ -151,23 +159,62 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
     cursor = conn.cursor()
     
     log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
+
+    # Use multiprocessing.Manager to create a shared list to track processed transactions
+    manager = Manager()
+    shared_processed_transactions = manager.list()  # Use shared list to track processed transactions
     
-    for tx in transactions:
-        # Identify and process backruns (transactions at p+1)
-        log(f"Simulating backrun for transaction {tx['hash']} at position p+1")
+    def process_transaction(tx):
+        try:
+            # Identify and process backruns (transactions at p+1)
+            log(f"Simulating backrun for transaction {tx['hash']} at position p+1")
+
+            # Perform the simulation for the backrun
+            backrun_result = simulate_transaction_bundle(web3, [tx], block_number, block_time)
+            
+            # Update state management with backrun result
+            if backrun_result:
+                update_block_state(web3, backrun_result)
+                # Log backrun simulation status in SQLite
+                cursor.execute(
+                    "INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
+                    (tx['hash'], block_number, "backrun_simulated")
+                )
+                shared_processed_transactions.append(tx['hash'])  # Add to shared list to prevent reprocessing
+            else:
+                log(f"Failed to simulate backrun for transaction {tx['hash']}")
         
-        # Perform the simulation for the backrun
-        backrun_result = simulate_transaction_bundle(web3, [tx], block_number, block_time)
-        
-        # Update state management with backrun result
-        if backrun_result:
-            update_block_state(web3, backrun_result)
-            # Log backrun simulation status in SQLite
-            cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
-                           (tx['hash'], block_number, "backrun_simulated"))
-            conn.commit()
-        else:
-            log(f"Failed to simulate backrun for transaction {tx['hash']}")
+        except Exception as e:
+            log_error(f"Error during backrun simulation for transaction {tx['hash']}: {e}")
+
+    # Use multiprocessing to parallelize simulations across processes
+    if use_multiprocessing:
+        with Pool(processes=max_processes) as pool:
+            pool.map(process_transaction, transactions)
+    else:
+        # Fallback to threading if multiprocessing is not enabled
+        threads = []
+        for tx in transactions:
+            thread = threading.Thread(target=process_transaction, args=(tx,))
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+
+    # Batch commit all database changes
+    try:
+        conn.commit()
+    except sqlite3.Error as e:
+        log_error(f"Error committing batched transactions: {e}")
+    
+    # Serialize shared processed transactions with MessagePack for efficiency
+    try:
+        processed_transactions_path = os.path.join(config['data_storage']['data_directory'], "processed_transactions.msgpack")
+        with open(processed_transactions_path, 'wb') as f:
+            msgpack.pack(list(shared_processed_transactions), f)
+        log(f"Stored processed transactions to {processed_transactions_path} using MessagePack.")
+    except Exception as e:
+        log_error(f"Error saving processed transactions with MessagePack: {e}")
 
     conn.close()
 
