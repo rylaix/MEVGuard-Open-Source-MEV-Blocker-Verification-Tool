@@ -256,6 +256,7 @@ def load_existing_block_and_bundles(block_number):
 def simulate_unprocessed_blocks():
     """
     Simulate only unprocessed blocks within the start and end block range.
+    Deprecated func
     """
     start_block = config.get('start_block')
     end_block = config.get('end_block')

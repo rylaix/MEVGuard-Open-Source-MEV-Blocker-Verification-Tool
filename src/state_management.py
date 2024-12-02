@@ -116,7 +116,7 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
                 tx_hash = tx.get('hash')
                 if tx_hash:
                     cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
-                                   (tx_hash, tx.get('bundle_id', 'unknown'), block_number, "simulated"))
+                                    (tx_hash, tx.get('bundle_id', 'unknown'), block_number, "simulated"))
                     conn.commit()
 
             # Update the state after successful simulation
@@ -126,7 +126,7 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
             for tx in transactions:
                 bundle_id = tx.get('bundle_id', 'unknown')
                 cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, processed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                               (bundle_id, block_number, "success"))
+                                (bundle_id, block_number, "success"))
                 conn.commit()
 
             return response.get('result')
@@ -240,7 +240,7 @@ def update_block_state(web3, transaction_results):
         if state_diff:
             # Store state_diff in the processed_bundles table if needed for future state analysis
             cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, processed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                           (tx_hash, result.get('blockNumber'), "success"))
+                            (tx_hash, result.get('blockNumber'), "success"))
             conn.commit()
             log(f"[INFO] Updated state for transaction {tx_hash} in block {result.get('blockNumber')}. StateDiff stored in database.")
         else:

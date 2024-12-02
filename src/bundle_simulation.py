@@ -3,11 +3,13 @@ import yaml
 import json
 import itertools
 import sqlite3
+import time
 from utils import setup_logging, log
 from db.db_utils import connect_to_database
 from state_management import simulate_transaction_bundle, verify_transaction_inclusion, update_block_state
 
 from db.database_initializer import initialize_or_verify_database
+import threading
 
 # Initialize the database tables before any further operations
 initialize_or_verify_database()
@@ -18,7 +20,8 @@ with open(config_path, 'r') as file:
 
 logs_dir = config['data_storage']['logs_directory']
 log_filename = config['data_storage']['log_filename']
-
+hardcoded_log_filename = "simulation_timings.log"
+log_file_path = os.path.join(logs_dir, hardcoded_log_filename)
 
 def greedy_bundle_selection(bundles, max_selected_bundles):
     """
@@ -39,7 +42,7 @@ def greedy_bundle_selection(bundles, max_selected_bundles):
 
 def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_data_folder='data'):
     """
-    Simulate the selected bundles and calculate the refund.
+    Simulate the selected bundles and calculate the refund, while measuring time for local operations and remote server responses.
     :param selected_bundles: List of selected bundles
     :param web3: Web3 instance for RPC communication
     :param block_number: Block number for the simulation
@@ -48,6 +51,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     :return: List of simulation results with refunds
     """
     conn = connect_to_database()
+    conn.execute('PRAGMA journal_mode=WAL;')  # Enable Write-Ahead Logging to reduce lock contention
     cursor = conn.cursor()
 
     simulation_results = []
@@ -104,6 +108,9 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
             processed_transactions.add(tx_hash)
 
+            # Measure local time for balance checking
+            local_start_time = time.time()
+
             # Check balance of the 'from' address
             sufficient_balance = True
             try:
@@ -114,6 +121,16 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
                 # Fetch the balance of the sender's address
                 balance = web3.eth.get_balance(from_address, block_identifier=block_number)
+
+                # Measure time taken to get balance from server
+                server_response_time = time.time() - local_start_time
+                local_time_end = time.time()
+                local_operation_time = local_time_end - local_start_time
+
+                # Log the time measurements
+                with open(log_file_path, 'a') as timing_file:
+                    timing_file.write(f"[TIME LOG] Local operation time for balance check (tx {tx_hash}): {local_operation_time} seconds\n")
+                    timing_file.write(f"[TIME LOG] Server response time for balance check (tx {tx_hash}): {server_response_time} seconds\n")
 
                 log(f"[DEBUG] Raw balance for address {from_address} at block {block_number}: {balance} (type: {type(balance)})")
 
@@ -150,12 +167,19 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
             # Simulate the transaction bundle
             try:
+                local_simulation_start = time.time()
                 log(f"[DEBUG] Simulating transaction bundle for transaction {tx_hash}")
                 results = simulate_transaction_bundle(web3, [tx], block_number, block_time)
+                local_simulation_end = time.time()
 
                 if results is None:
                     log(f"[WARNING] No results returned for transaction {tx_hash}. Simulation might have failed or returned empty.")
                     continue
+
+                # Measure and log simulation time
+                simulation_time = local_simulation_end - local_simulation_start
+                with open(log_file_path, 'a') as timing_file:
+                    timing_file.write(f"[TIME LOG] Local simulation time for transaction {tx_hash}: {simulation_time} seconds\n")
 
             except Exception as e:
                 log(f"[ERROR] Error simulating transaction bundle for transaction {tx_hash}: {e}")
@@ -174,9 +198,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
                     # Save successful simulation to the output directory
                     simulation_output_directory = config['data_storage']['simulation_output_directory']
-                    if not os.path.exists(simulation_output_directory):
-                        os.makedirs(simulation_output_directory)
-
+                    os.makedirs(simulation_output_directory, exist_ok=True)
                     output_file_path = os.path.join(simulation_output_directory, f"simulation_results_{block_number}.json")
                     with open(output_file_path, 'w') as output_file:
                         json.dump(simulation_results, output_file, indent=4)
@@ -185,6 +207,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
                     # Insert transaction record into SQLite
                     cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
                                    (tx_hash, bundle_id, block_number, "simulated"))
+                    any_new_transactions = True
                     conn.commit()
 
                 except Exception as e:
@@ -199,19 +222,20 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
                     log(f"[ERROR] Error updating state for transaction {tx_hash}: {e}")
                     continue
 
-                any_new_transactions = True
-            else:
-                log(f"[INFO] No results for transaction {tx_hash}, simulation skipped.")
-
         # Update bundle status in SQLite if new transactions were processed
         if any_new_transactions:
-            cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status) VALUES (?, ?, ?)",
-                           (bundle_id, block_number, "processed"))
-            conn.commit()
+            try:
+                cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status) VALUES (?, ?, ?)",
+                               (bundle_id, block_number, "processed"))
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                log(f"[ERROR] Database locked while updating bundle status for bundle {bundle_id}: {e}")
+                continue
 
     log(f"[INFO] Finished simulating bundles for block {block_number}")
     conn.close()
     return simulation_results
+
 
 
 def calculate_refund(simulation_result):
