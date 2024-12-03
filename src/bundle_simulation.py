@@ -128,9 +128,8 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
                 local_operation_time = local_time_end - local_start_time
 
                 # Log the time measurements
-                with open(log_file_path, 'a') as timing_file:
-                    timing_file.write(f"[TIME LOG] Local operation time for balance check (tx {tx_hash}): {local_operation_time} seconds\n")
-                    timing_file.write(f"[TIME LOG] Server response time for balance check (tx {tx_hash}): {server_response_time} seconds\n")
+                log(f"[TIME LOG] Local operation time for balance check (tx {tx_hash}): {local_operation_time} seconds")
+                log(f"[TIME LOG] Server response time for balance check (tx {tx_hash}): {server_response_time} seconds")
 
                 log(f"[DEBUG] Raw balance for address {from_address} at block {block_number}: {balance} (type: {type(balance)})")
 
@@ -153,7 +152,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
                 required_balance = gas_price * gas_limit + value
                 log(f"[DEBUG] Required balance for transaction {tx_hash}: {required_balance} Wei")
 
-                if sufficient_balance and balance < required_balance:
+                if balance < required_balance:
                     log(f"[INFO] Skipping transaction {tx_hash} due to insufficient balance: {balance} < {required_balance}")
                     sufficient_balance = False
 
@@ -178,8 +177,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
                 # Measure and log simulation time
                 simulation_time = local_simulation_end - local_simulation_start
-                with open(log_file_path, 'a') as timing_file:
-                    timing_file.write(f"[TIME LOG] Local simulation time for transaction {tx_hash}: {simulation_time} seconds\n")
+                log(f"[TIME LOG] Local simulation time for transaction {tx_hash}: {simulation_time} seconds")
 
             except Exception as e:
                 log(f"[ERROR] Error simulating transaction bundle for transaction {tx_hash}: {e}")
@@ -235,7 +233,6 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     log(f"[INFO] Finished simulating bundles for block {block_number}")
     conn.close()
     return simulation_results
-
 
 
 def calculate_refund(simulation_result):

@@ -615,12 +615,14 @@ if __name__ == "__main__":
                     included = verify_transaction_inclusion(web3, block_number, tx_hash)
                     if not included:
                         log_error(f"Transaction {tx_hash} not included in block {block_number}")
-
+'''
     # Detect potential violations by comparing optimal vs actual bundle combinations
     log("Detecting any potential violations of the MEV Blocker refund rules...")
     for block_number in block_numbers:
         optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
         actual_refund = calculate_refund(simulate_bundles(selected_bundles, web3, block_number, block_time))
         detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
+        
+'''
 
-    log("All tasks for this phase completed successfully.")
+log("All tasks for this phase completed successfully.")
