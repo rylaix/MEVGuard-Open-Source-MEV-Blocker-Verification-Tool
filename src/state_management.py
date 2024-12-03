@@ -144,29 +144,29 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
     return None
 
 
-
+# Modified function for simulating backruns without aggressive multiprocessing optimizations
 def simulate_backruns_and_update_state(web3, transactions, block_number, block_time):
     """
     Simulate all possible backruns at position p+1 and update the state accordingly.
-    Parameters:
-    - web3: Web3 instance
-    - transactions: List of transactions from the bundle
-    - block_number: The block number in which the transaction is included
-    - block_time: Timestamp of the block
+    :param web3: Web3 instance
+    :param transactions: List of transactions from the bundle
+    :param block_number: The block number in which the transaction is included
+    :param block_time: Timestamp of the block
     """
+    log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
+    
     # Establish SQLite connection
     conn = connect_to_database()
     cursor = conn.cursor()
-    
-    log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
 
-    # Use multiprocessing.Manager to create a shared list to track processed transactions
-    manager = Manager()
-    shared_processed_transactions = manager.list()  # Use shared list to track processed transactions
-    
-    def process_transaction(tx):
+    for tx in transactions:
+        # Ensure that the transaction is in dictionary format
+        if isinstance(tx, str):
+            log_error(f"Invalid transaction format: {tx}. Expected dictionary, got string.")
+            continue
+
         try:
-            # Identify and process backruns (transactions at p+1)
+            # Log the simulation process for debugging
             log(f"Simulating backrun for transaction {tx['hash']} at position p+1")
 
             # Perform the simulation for the backrun
@@ -175,48 +175,19 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
             # Update state management with backrun result
             if backrun_result:
                 update_block_state(web3, backrun_result)
-                # Log backrun simulation status in SQLite
                 cursor.execute(
                     "INSERT OR REPLACE INTO processed_transactions (tx_hash, block_number, status) VALUES (?, ?, ?)",
                     (tx['hash'], block_number, "backrun_simulated")
                 )
-                shared_processed_transactions.append(tx['hash'])  # Add to shared list to prevent reprocessing
+                conn.commit()
+                log(f"Backrun simulated successfully for transaction {tx['hash']}")
             else:
                 log(f"Failed to simulate backrun for transaction {tx['hash']}")
-        
         except Exception as e:
             log_error(f"Error during backrun simulation for transaction {tx['hash']}: {e}")
 
-    # Use multiprocessing to parallelize simulations across processes
-    if use_multiprocessing:
-        with Pool(processes=max_processes) as pool:
-            pool.map(process_transaction, transactions)
-    else:
-        # Fallback to threading if multiprocessing is not enabled
-        threads = []
-        for tx in transactions:
-            thread = threading.Thread(target=process_transaction, args=(tx,))
-            thread.start()
-            threads.append(thread)
-        for thread in threads:
-            thread.join()
-
-    # Batch commit all database changes
-    try:
-        conn.commit()
-    except sqlite3.Error as e:
-        log_error(f"Error committing batched transactions: {e}")
-    
-    # Serialize shared processed transactions with MessagePack for efficiency
-    try:
-        processed_transactions_path = os.path.join(config['data_storage']['data_directory'], "processed_transactions.msgpack")
-        with open(processed_transactions_path, 'wb') as f:
-            msgpack.pack(list(shared_processed_transactions), f)
-        log(f"Stored processed transactions to {processed_transactions_path} using MessagePack.")
-    except Exception as e:
-        log_error(f"Error saving processed transactions with MessagePack: {e}")
-
     conn.close()
+
 
 def update_block_state(web3, transaction_results):
     """
@@ -256,5 +227,18 @@ def verify_transaction_inclusion(web3, block_number, transaction_hash):
     :param transaction_hash: Hash of the transaction to verify
     :return: Boolean indicating if the transaction is included
     """
-    block = web3.eth.get_block(block_number, full_transactions=True)
-    return any(tx['hash'] == transaction_hash for tx in block.transactions)
+    try:
+        block = web3.eth.get_block(block_number, full_transactions=True)
+
+        # Ensure transactions are handled properly as dictionaries or AttributeDict
+        for tx in block.transactions:
+            # Handle both AttributeDict and dictionary-like transaction structures
+            tx_hash = getattr(tx, 'hash', None) or tx.get('hash', None)
+            if tx_hash == transaction_hash:
+                return True
+
+        return False
+
+    except Exception as e:
+        log_error(f"Error verifying transaction inclusion for block {block_number}, transaction {transaction_hash}: {e}")
+        return False

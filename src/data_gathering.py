@@ -14,8 +14,22 @@ import yaml
 import requests
 import sqlite3
 
-from bundle_simulation import greedy_bundle_selection, simulate_bundles, store_simulation_results
-from state_management import initialize_web3, simulate_transaction_bundle, update_block_state, verify_transaction_inclusion 
+from bundle_simulation import (
+    greedy_bundle_selection,
+    simulate_bundles,
+    store_simulation_results,
+    simulate_optimal_bundle_combinations,
+    calculate_refund,
+    detect_violation 
+)
+
+from state_management import (
+    initialize_web3, 
+    simulate_transaction_bundle, 
+    update_block_state, 
+    verify_transaction_inclusion, 
+    simulate_backruns_and_update_state
+)
 from db.database_initializer import initialize_or_verify_database, load_config
 from db.db_utils import connect_to_database
 
@@ -418,6 +432,77 @@ def process_block(block_number, bundles):
 
     except Exception as e:
         log_error(f"Error while processing block {block_number}: {e}")
+        
+# Function for further centralization
+def determine_and_simulate(web3, block_number, transaction_hash):
+    """
+    Determine the position of a transaction within the block and simulate subsequent bundles.
+    :param web3: Web3 instance connected to the RPC node
+    :param block_number: Block number to process
+    :param transaction_hash: Hash of the target transaction
+    """
+    try:
+        # Fetch block data with all transactions
+        block = web3.eth.get_block(block_number, full_transactions=True)
+        transaction_position = None
+        
+        # Determine the transaction position within the block
+        for index, tx in enumerate(block.transactions):
+            if tx.hash == transaction_hash:
+                transaction_position = index
+                break
+
+        if transaction_position is None:
+            log(f"Transaction {transaction_hash} not found in block {block_number}.")
+            return
+
+        log(f"Transaction position determined: {transaction_position} in block {block_number}.")
+
+        # Track all bundles related to the transaction broadcasted within the first 10 seconds prior to the block time
+        bundles = get_mev_blocker_bundles()
+        if not bundles:
+            log("No MEV Blocker bundles found for simulation.")
+            return
+
+        # Apply greedy algorithm to select the best bundles for simulation
+        max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+        selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
+
+        # Simulate selected bundles
+        log(f"Simulating selected bundles for block {block_number}...")
+        block_time = block.get('timestamp')
+        simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
+
+        # Store the simulation results
+        simulation_output_directory = config['data_storage']['simulation_output_directory']
+        simulation_output_file = os.path.join(simulation_output_directory, f"simulation_{block_number}.json")
+        store_simulation_results(simulation_results, simulation_output_file)
+        log(f"Stored simulation results for block {block_number}.")
+
+        # Perform backrun simulations and update the state for each selected bundle
+        for bundle in selected_bundles:
+            transactions = bundle.get('transactions', [])
+            if transactions:
+                simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
+
+        # Verify inclusion of transactions in the block
+        log("Verifying inclusion of all simulated transactions in their respective blocks...")
+        for bundle in selected_bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+
+        # Detect potential violations by comparing optimal vs actual bundle combinations
+        log("Detecting any potential violations of the MEV Blocker refund rules...")
+        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
+        actual_refund = calculate_refund(simulation_results)
+        detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
+
+    except Exception as e:
+        log_error(f"Error during determine_and_simulate for block {block_number}: {e}")
 
 
 if __name__ == "__main__":
@@ -513,5 +598,29 @@ if __name__ == "__main__":
             except Exception as e:
                 log_error(f"Error simulating bundles for block {block_number}: {e}")
                 continue
+
+    # Perform backrun simulations and update state for each selected bundle
+    for block_number in block_numbers:
+        for bundle in selected_bundles:
+            transactions = bundle.get('transactions', [])
+            simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
+
+    # Verify the inclusion of transactions in the block
+    log("Verifying inclusion of all simulated transactions in their respective blocks...")
+    for block_number in block_numbers:
+        for bundle in selected_bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+
+    # Detect potential violations by comparing optimal vs actual bundle combinations
+    log("Detecting any potential violations of the MEV Blocker refund rules...")
+    for block_number in block_numbers:
+        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
+        actual_refund = calculate_refund(simulate_bundles(selected_bundles, web3, block_number, block_time))
+        detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
 
     log("All tasks for this phase completed successfully.")

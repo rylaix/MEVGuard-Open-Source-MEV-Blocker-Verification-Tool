@@ -289,8 +289,6 @@ def calculate_refund(simulation_result):
 def simulate_optimal_bundle_combinations(bundles, web3, block_number):
     """
     Simulate all permutations of the bundles to check for violations in the optimal bundle merging rule.
-    This includes combinations of all backruns and checks whether they could have offered more value.
-
     :param bundles: List of all potential bundles
     :param web3: Web3 instance for RPC communication
     :param block_number: The block number to simulate
@@ -303,7 +301,7 @@ def simulate_optimal_bundle_combinations(bundles, web3, block_number):
     for r in range(1, len(bundles) + 1):
         for combination in itertools.combinations(bundles, r):
             transactions = [tx['hash'] for bundle in combination for tx in bundle['transactions']]
-            results = simulate_transaction_bundle(web3, transactions, block_number)
+            results = simulate_transaction_bundle(web3, transactions, block_number, block_time=None)
 
             if results:
                 refund = calculate_refund(results)
