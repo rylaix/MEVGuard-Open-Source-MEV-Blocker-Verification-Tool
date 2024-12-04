@@ -3,13 +3,16 @@ import sqlite3
 import yaml
 from utils import log, load_config
 
+# Base directory for consistent path handling
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+
 def get_database_path():
     """
     Retrieve the database file path from the configuration.
     :return: Absolute path to the database file.
     """
     config = load_config()
-    db_path = os.path.join(os.path.dirname(__file__), '../../', config['data_storage']['database_file'])
+    db_path = os.path.join(BASE_DIR, config['data_storage']['database_file'])
     return os.path.abspath(db_path)
 
 def connect_to_database():

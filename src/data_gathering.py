@@ -37,12 +37,15 @@ from db.db_utils import connect_to_database
 # Initialize the database tables before any further operations
 initialize_or_verify_database()
 
+# Use BASE_DIR to handle paths dynamically for different environments
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
 # Load environment variables
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path, override=True)
 
 # Load additional config if needed
-config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -58,11 +61,11 @@ os.makedirs(logs_dir, exist_ok=True)
 os.makedirs(simulation_results_dir, exist_ok=True)
 
 # Load SQL queries from files
-backrun_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_backruns.sql')
+backrun_query_path = os.path.join(BASE_DIR, 'queries', 'fetch_backruns.sql')
 with open(backrun_query_path, 'r') as file:
     local_backrun_query_sql = file.read()
 
-fetch_remaining_transactions_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_remaining_transactions.sql')
+fetch_remaining_transactions_query_path = os.path.join(BASE_DIR, 'queries', 'fetch_remaining_transactions.sql')
 with open(fetch_remaining_transactions_query_path, 'r') as file:
     local_non_mev_query_sql = file.read()
 
@@ -226,7 +229,7 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
 
 def get_latest_processed_block():
     """Get the latest processed block while respecting configured start_block if no previous blocks exist."""
-    conn = sqlite3.connect('../../mevguard_tracking.db')
+    conn = connect_to_database()
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT MAX(block_number) FROM block_data")

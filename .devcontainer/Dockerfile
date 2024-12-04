@@ -3,6 +3,7 @@ FROM python:3.10.10-slim
 
 # Install necessary system dependencies
 RUN apt-get update && apt-get install -y \
+    sudo \
     build-essential \
     cmake \
     libssl-dev \
@@ -10,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libffi-dev \
     python3-dev \
     curl \
-    wget
+    wget 
 
 # Create a user to run VS Code in a non-root context
 RUN useradd -m vscode && \
@@ -22,6 +23,9 @@ WORKDIR /workspace
 
 # Copy all project files into the container
 COPY . /workspace
+
+# Ensure the vscode user has ownership of the workspace directory
+RUN chown -R vscode:vscode /workspace
 
 # Install Python dependencies
 RUN pip install --upgrade pip \

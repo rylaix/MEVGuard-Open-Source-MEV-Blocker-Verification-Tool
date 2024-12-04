@@ -12,6 +12,7 @@ This project is an open-source tool designed to verify MEV Blocker transactions,
 - [File Structure](#file-structure)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
+- [Devcontainer Setup](#devcontainer-setup)
 - [License](#license)
 
 ## Project Overview
@@ -151,3 +152,47 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 - **API Key Errors**: Double-check that your API keys in the `.env` file are correct.
 - **Network Errors**: Ensure you have a stable internet connection and valid RPC node URL.
 - **C Extension Compilation**: Ensure you have the necessary build tools installed for compiling C extensions.
+
+## Devcontainer Setup
+
+The project is configured to run smoothly in a **devcontainer** within Visual Studio Code (VS Code). This setup allows you to easily work within an isolated environment without worrying about dependency installation or system configuration issues.
+
+### Prerequisites
+
+Before using the devcontainer, ensure the following prerequisites are met:
+1. **Docker** is installed and running on your machine.
+2. **Visual Studio Code** is installed.
+3. Install the **Remote Development Extension Pack** in VS Code, which includes:
+   - Remote - Containers
+   - Remote - SSH
+   - Remote - WSL (optional, if you're using Windows with WSL)
+
+You can find the Remote Development Extension Pack on the [VS Code marketplace](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.vscode-remote-extensionpack).
+
+### Steps to Use the Devcontainer
+
+## **1. Open the Project in VS Code**
+
+**Open the folder in VS Code**:
+
+```bash
+code .
+```
+
+## **2. Reopen in Container**
+
+Once the project is open in VS Code, you'll be prompted to reopen the project in a container. Click **Reopen in Container**.
+
+VS Code will start building the container image as specified in the `Dockerfile` and `devcontainer.json`. This process may take a few minutes to complete.
+
+## **3. Activate the Virtual Environment**
+
+After the container is built and you're inside the VS Code environment, you need to activate the Python virtual environment:
+
+Open the integrated terminal in VS Code and run:
+
+```bash
+source /workspace/.venv/bin/activate
+```
+
+Once activated, you're ready to start working on the project.

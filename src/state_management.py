@@ -10,7 +10,10 @@ import requests
 from multiprocessing import Pool, cpu_count, Manager
 import threading
 
-config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+# Base directory for consistent path handling
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 

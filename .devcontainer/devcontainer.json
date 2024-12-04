@@ -19,7 +19,7 @@
         }
     },
     "forwardPorts": [8545],
-    "postCreateCommand": "pip install -r requirements.txt",
+    "postCreateCommand": "sudo chown -R vscode:vscode /workspace && pip install -r requirements.txt && python /workspace/.devcontainer/venv.py",
     "remoteUser": "vscode",
     "mounts": [
         "source=${localWorkspaceFolder}/logs,target=/workspace/logs,type=bind",

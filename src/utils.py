@@ -9,9 +9,12 @@ try:
 except ImportError:
     ColoredFormatter = None
 
+# Base directory for consistent path handling
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
 # Load configuration from the config file
 def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+    config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
     with open(config_path, 'r') as file:
         return yaml.safe_load(file)
 

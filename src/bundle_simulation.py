@@ -15,7 +15,10 @@ from state_management import has_sufficient_balance
 # Initialize the database tables before any further operations
 initialize_or_verify_database()
 
-config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+# Base directory for consistent path handling
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -68,7 +71,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     processed_bundles = set()  # Track processed bundles to avoid infinite loops
 
     # Load bundles from the data folder to ensure proper tracking of bundle IDs/names
-    bundle_file = f"{bundle_data_folder}/bundles_{block_number}.json"
+    bundle_file = os.path.join(BASE_DIR, bundle_data_folder, f"bundles_{block_number}.json")
     try:
         with open(bundle_file, 'r') as file:
             loaded_bundles = json.load(file)

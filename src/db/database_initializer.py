@@ -3,8 +3,11 @@ import os
 import yaml
 from utils import log, log_error, load_config
 
+# Base directory for consistent path handling
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+
 def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), '../../config/config.yaml')
+    config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
     with open(config_path, 'r') as file:
         return yaml.safe_load(file)
 
@@ -15,11 +18,11 @@ def initialize_or_verify_database():
     try:
         # Load configuration to get the database path
         config = load_config()
-        db_path = os.path.join(os.path.dirname(__file__), '../../', config['data_storage']['database_file'])
+        db_path = os.path.join(BASE_DIR, config['data_storage']['database_file'])
         db_path = os.path.abspath(db_path)
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        sql_file_path = os.path.join(base_dir, '../../queries/mevguard_tracking.sql')
+        sql_file_path = os.path.join(BASE_DIR, 'queries', 'mevguard_tracking.sql')
 
         # Establish a connection to the SQLite database
         if not os.path.exists(db_path):
