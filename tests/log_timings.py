@@ -29,9 +29,9 @@ logs_dir = config['data_storage']['logs_directory']
 log_file_path = os.path.join(logs_dir, 'simulation_timings.log')
 
 # Define regex patterns to identify different types of interactions
-local_operation_pattern = re.compile(r'\[TIME LOG\] Local operation time for balance check \(tx (0x[a-fA-F0-9]+)\): ([\d.]+) seconds')
-server_response_pattern = re.compile(r'\[TIME LOG\] Server response time for balance check \(tx (0x[a-fA-F0-9]+)\): ([\d.]+) seconds')
-local_simulation_pattern = re.compile(r'\[TIME LOG\] Local simulation time for transaction (0x[a-fA-F0-9]+): ([\d.]+) seconds')
+local_operation_pattern = re.compile(r'Local operation time for balance check \(tx (0x[a-fA-F0-9]+)\): ([\d.]+) seconds')
+server_response_pattern = re.compile(r'Server response time for balance check \(tx (0x[a-fA-F0-9]+)\): ([\d.]+) seconds')
+local_simulation_pattern = re.compile(r'Local simulation time for transaction (0x[a-fA-F0-9]+): ([\d.]+) seconds')
 
 # Containers to store parsed data
 local_operations = []

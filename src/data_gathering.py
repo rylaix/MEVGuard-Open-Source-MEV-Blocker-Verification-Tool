@@ -20,7 +20,8 @@ from bundle_simulation import (
     store_simulation_results,
     simulate_optimal_bundle_combinations,
     calculate_refund,
-    detect_violation 
+    detect_violation,
+    has_sufficient_balance
 )
 
 from state_management import (
@@ -530,18 +531,18 @@ if __name__ == "__main__":
     end_block = config.get('end_block')
     latest_processed_block = get_latest_processed_block() or start_block
 
-    # Apply the `end_block` as an upper boundary
+    # Apply the end_block as an upper boundary
     if latest_processed_block > end_block:
         log(f"Latest processed block {latest_processed_block} exceeds the specified end block {end_block}.")
         exit(1)
 
-    # Generate block numbers up to `end_block`
+    # Generate block numbers up to end_block
     num_blocks_to_process = config.get('num_blocks_to_process', 5)
     if num_blocks_to_process == "all":
         # Gather all blocks from latest_processed_block up to end_block
         block_numbers = list(range(latest_processed_block, end_block + 1))
     else:
-        # Gather the specified number of blocks, ensuring we do not exceed `end_block`
+        # Gather the specified number of blocks, ensuring we do not exceed end_block
         block_numbers = [
             block for block in range(latest_processed_block, latest_processed_block + num_blocks_to_process)
             if block <= end_block
@@ -615,14 +616,54 @@ if __name__ == "__main__":
                     included = verify_transaction_inclusion(web3, block_number, tx_hash)
                     if not included:
                         log_error(f"Transaction {tx_hash} not included in block {block_number}")
-'''
+
+    conn = connect_to_database()
+    cursor = conn.cursor()
+
     # Detect potential violations by comparing optimal vs actual bundle combinations
     log("Detecting any potential violations of the MEV Blocker refund rules...")
-    for block_number in block_numbers:
-        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
-        actual_refund = calculate_refund(simulate_bundles(selected_bundles, web3, block_number, block_time))
-        detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
-        
-'''
 
-log("All tasks for this phase completed successfully.")
+    for block_number in block_numbers:
+        # Check if the block has already been processed for violations
+        cursor.execute("SELECT is_simulated FROM block_data WHERE block_number=?", (block_number,))
+        block_status = cursor.fetchone()
+        if block_status and block_status[0]:
+            log(f"[INFO] Block {block_number} has already been processed for violations. Skipping...")
+            continue
+
+        # Perform simulation of the optimal bundle combinations for this block
+        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
+
+        # Filter out bundles that have already been simulated for the current block
+        selected_bundles_to_simulate = []
+        for bundle in selected_bundles:
+            bundle_id = bundle.get('id', 'unknown')
+            # Check if the bundle has already been simulated for the current block
+            cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id=? AND block_number=?", (bundle_id, block_number))
+            bundle_status = cursor.fetchone()
+            if not bundle_status or bundle_status[0] != 'simulated':
+                if all(isinstance(tx, dict) for tx in bundle['transactions']):
+                    selected_bundles_to_simulate.append(bundle)
+                else:
+                    log(f"[ERROR] Bundle {bundle_id} contains transactions that are not properly formatted as dictionaries. Skipping.")
+
+        # If we have any bundles that need simulation, run the simulation and store the result
+        if selected_bundles_to_simulate:
+            # `simulate_bundles()` will skip transactions and bundles that have been processed, so it's safe to call with all bundles
+            simulation_results = simulate_bundles(selected_bundles_to_simulate, web3, block_number, block_time)
+            actual_refund = calculate_refund(simulation_results)
+        else:
+            log(f"[INFO] No new bundles to simulate for block {block_number}. Skipping simulation step.")
+            actual_refund = 0  # Default value in case no new bundles are simulated
+
+        # After simulation, detect potential violations if both optimal and actual exist
+        if optimal_combination:
+            detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
+
+        # Mark block as fully processed if all tasks are completed
+        cursor.execute(
+            "UPDATE block_data SET is_simulated = ? WHERE block_number = ?",
+            (True, block_number)
+        )
+        conn.commit()
+        log(f"[INFO] Block {block_number} marked as fully processed in block_data.")

@@ -10,6 +10,7 @@ from state_management import simulate_transaction_bundle, verify_transaction_inc
 
 from db.database_initializer import initialize_or_verify_database
 import threading
+from state_management import has_sufficient_balance
 
 # Initialize the database tables before any further operations
 initialize_or_verify_database()
@@ -50,6 +51,14 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     :param bundle_data_folder: Folder where bundle data files are stored
     :return: List of simulation results with refunds
     """
+    # Initialize logging for simulation timings
+    logs_dir = config['data_storage']['logs_directory']
+    hardcoded_log_filename = "simulation_timings.log"
+    log_file_path = os.path.join(logs_dir, hardcoded_log_filename)
+
+    # Create log file directory if it doesn't exist
+    os.makedirs(logs_dir, exist_ok=True)
+
     conn = connect_to_database()
     conn.execute('PRAGMA journal_mode=WAL;')  # Enable Write-Ahead Logging to reduce lock contention
     cursor = conn.cursor()
@@ -75,9 +84,9 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
         log(f"[DEBUG] Processing bundle ID: {bundle_id}")
 
         # Skip already processed bundles
-        cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id=?", (bundle_id,))
+        cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id=? AND block_number=?", (bundle_id, block_number))
         bundle_status = cursor.fetchone()
-        if bundle_status is not None:
+        if bundle_status is not None and bundle_status[0] == 'simulated':
             log(f"[DEBUG] Skipping already processed bundle ID: {bundle_id}.")
             continue
 
@@ -91,6 +100,17 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
         any_new_transactions = False
 
+        # Check if the entire bundle has sufficient balance before simulating transactions
+        if not has_sufficient_balance({'transactions': transactions}, web3):
+            log(f"[INFO] Bundle {bundle_id} has insufficient balance for one or more transactions. Skipping bundle.")
+            # Mark all transactions in this bundle as skipped due to insufficient balance
+            for tx in transactions:
+                tx_hash = tx.get('hash', 'unknown')
+                cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
+                               (tx_hash, bundle_id, block_number, "insufficient_balance"))
+            conn.commit()
+            continue
+
         for tx in transactions:
             tx_hash = tx.get('hash')
             if not tx_hash:
@@ -102,7 +122,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
             # Skip already processed transactions
             cursor.execute("SELECT status FROM processed_transactions WHERE tx_hash=?", (tx_hash,))
             tx_status = cursor.fetchone()
-            if tx_status is not None:
+            if tx_status is not None and tx_status[0] == 'simulated':
                 log(f"[DEBUG] Skipping already processed transaction: {tx_hash}")
                 continue
 
@@ -128,8 +148,9 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
                 local_operation_time = local_time_end - local_start_time
 
                 # Log the time measurements
-                log(f"[TIME LOG] Local operation time for balance check (tx {tx_hash}): {local_operation_time} seconds")
-                log(f"[TIME LOG] Server response time for balance check (tx {tx_hash}): {server_response_time} seconds")
+                with open(log_file_path, 'a') as timing_log:
+                    timing_log.write(f"Local operation time for balance check (tx {tx_hash}): {local_operation_time} seconds\n")
+                    timing_log.write(f"Server response time for balance check (tx {tx_hash}): {server_response_time} seconds\n")
 
                 log(f"[DEBUG] Raw balance for address {from_address} at block {block_number}: {balance} (type: {type(balance)})")
 
@@ -162,6 +183,10 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
             if not sufficient_balance:
                 log(f"[INFO] Skipping transaction ID: {tx_hash} due to insufficient balance.")
+                # Insert transaction record with insufficient balance status
+                cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
+                               (tx_hash, bundle_id, block_number, "insufficient_balance"))
+                conn.commit()
                 continue
 
             # Simulate the transaction bundle
@@ -177,7 +202,8 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
                 # Measure and log simulation time
                 simulation_time = local_simulation_end - local_simulation_start
-                log(f"[TIME LOG] Local simulation time for transaction {tx_hash}: {simulation_time} seconds")
+                with open(log_file_path, 'a') as timing_log:
+                    timing_log.write(f"Local simulation time for transaction {tx_hash}: {simulation_time} seconds\n")
 
             except Exception as e:
                 log(f"[ERROR] Error simulating transaction bundle for transaction {tx_hash}: {e}")
@@ -224,7 +250,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
         if any_new_transactions:
             try:
                 cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status) VALUES (?, ?, ?)",
-                               (bundle_id, block_number, "processed"))
+                               (bundle_id, block_number, "simulated"))
                 conn.commit()
             except sqlite3.OperationalError as e:
                 log(f"[ERROR] Database locked while updating bundle status for bundle {bundle_id}: {e}")
@@ -233,6 +259,8 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     log(f"[INFO] Finished simulating bundles for block {block_number}")
     conn.close()
     return simulation_results
+
+
 
 
 def calculate_refund(simulation_result):
@@ -291,13 +319,27 @@ def simulate_optimal_bundle_combinations(bundles, web3, block_number):
     :param block_number: The block number to simulate
     :return: Optimal bundle combination and simulation results
     """
+    conn = connect_to_database()
+    cursor = conn.cursor()
+
     optimal_combination = None
     highest_refund = 0
 
     # Generate all possible combinations of bundles
     for r in range(1, len(bundles) + 1):
         for combination in itertools.combinations(bundles, r):
-            transactions = [tx['hash'] for bundle in combination for tx in bundle['transactions']]
+            combination_ids = [bundle.get('id') for bundle in combination]
+            
+            # Skip combinations that have already been simulated
+            cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id IN ({seq}) AND block_number=?"
+                           .format(seq=','.join(['?']*len(combination_ids))), (*combination_ids, block_number))
+            statuses = cursor.fetchall()
+
+            if statuses and all(status[0] == 'simulated' for status in statuses):
+                log(f"[INFO] Skipping combination {combination_ids} as it is already simulated for block {block_number}.")
+                continue
+
+            transactions = [tx for bundle in combination for tx in bundle['transactions']]
             results = simulate_transaction_bundle(web3, transactions, block_number, block_time=None)
 
             if results:
@@ -307,6 +349,7 @@ def simulate_optimal_bundle_combinations(bundles, web3, block_number):
                     optimal_combination = combination
 
     log(f"Optimal Refund: {highest_refund} ETH with {len(optimal_combination)} bundles" if optimal_combination else "No optimal combination found.")
+    conn.close()
     return optimal_combination, highest_refund
 
 
