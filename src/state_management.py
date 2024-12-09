@@ -237,6 +237,7 @@ def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, 
     return None
 
 
+
 def simulate_backruns_and_update_state(web3, transactions, block_number, block_time):
     """
     Simulate all possible backruns at position p+1 and update the state accordingly.
@@ -353,7 +354,7 @@ def update_block_state(web3, transaction_results):
 
     conn.close()
 
-def verify_transaction_inclusion(web3, block_number, transaction_hash):
+def verify_transaction_inclusion(web3, block_number, transaction_hash, retries=3):
     """
     Verify that a transaction is included in a given block.
     :param web3: Web3 instance connected to the RPC node
@@ -361,21 +362,29 @@ def verify_transaction_inclusion(web3, block_number, transaction_hash):
     :param transaction_hash: Hash of the transaction to verify
     :return: Boolean indicating if the transaction is included
     """
-    try:
-        block = web3.eth.get_block(block_number, full_transactions=True)
-
-        # Ensure transactions are handled properly as dictionaries or AttributeDict
-        for tx in block.transactions:
-            # Handle both AttributeDict and dictionary-like transaction structures
-            tx_hash = getattr(tx, 'hash', None) or tx.get('hash', None)
-            if tx_hash == transaction_hash:
+    for attempt in range(retries):
+        try:
+            tx = web3.eth.get_transaction(transaction_hash)
+            if tx and tx.get('blockNumber') == block_number:
                 return True
+            elif tx:
+                log(f"Transaction {transaction_hash} found but is in block {tx.get('blockNumber')}, not {block_number}.")
+                return False
 
-        return False
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                retry_interval = config['rate_limit_handling'].get('initial_delay_seconds', 5) * (2 ** attempt)
+                log(f"429 Error: Too Many Requests while verifying transaction inclusion. Retrying in {retry_interval} seconds...")
+                time.sleep(retry_interval)
+            else:
+                log_error(f"HTTP error during transaction inclusion verification: {e}")
+                return False
+        except Exception as e:
+            log_error(f"Unexpected error during transaction inclusion verification for transaction {transaction_hash}: {e}")
+            return False
 
-    except Exception as e:
-        log_error(f"Error verifying transaction inclusion for block {block_number}, transaction {transaction_hash}: {e}")
-        return False
+    log(f"Exceeded retry limit while verifying inclusion for transaction {transaction_hash}.")
+    return False
 
 def has_sufficient_balance(bundle, web3):
     """
