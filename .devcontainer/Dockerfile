@@ -4,6 +4,8 @@ FROM python:3.10.10-slim
 # Install necessary system dependencies
 RUN apt-get update && apt-get install -y \
     sudo \
+    git \
+    openssh-client \
     build-essential \
     cmake \
     libssl-dev \

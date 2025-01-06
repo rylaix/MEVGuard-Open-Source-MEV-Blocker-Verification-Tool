@@ -13,6 +13,7 @@ This project is an open-source tool designed to verify MEV Blocker transactions,
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [Devcontainer Setup](#devcontainer-setup)
+  - [Setting Up GitHub for Git in Devcontainer](#setting-up-github-for-git-in-devcontainer)
 - [License](#license)
 
 ## Project Overview
@@ -196,3 +197,42 @@ source /workspace/.venv/bin/activate
 ```
 
 Once activated, you're ready to start working on the project.
+
+## Setting Up GitHub for Git in Devcontainer
+To ensure Git works seamlessly in the development container, configure GitHub with SSH authentication:
+
+Step 1: Generate SSH Key (If Not Already Generated)
+Generate a new SSH key on your host machine:
+```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+```
+
+
+Step 2: Add the SSH Key to GitHub
+Copy your public key:
+```
+cat ~/.ssh/id_ed25519.pub
+```
+
+Go to Settings > SSH and GPG Keys in GitHub.
+Add a new SSH key, paste the copied key, and save it.
+
+
+Step 3: Test the SSH Connection
+Test the connection:
+```bash
+ssh -T git@github.com
+```
+
+
+Step 4: Forward SSH Agent to Devcontainer
+Start the SSH agent on your host machine:
+```bash
+eval $(ssh-agent)
+ssh-add ~/.ssh/id_ed25519
+```
+
+Rebuild the devcontainer in VS Code:
+Open the Command Palette (`Ctrl+Shift+P`).
+Select `Remote-Containers: Rebuild Container`.
+Now, Git operations inside the container will use your SSH credentials.
