@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from utils import setup_logging, log
+from utils import setup_logging, log, log_error
 from web3 import Web3
 from web3.datastructures import AttributeDict
 from dune_client.client import DuneClient
@@ -11,13 +11,41 @@ from dune_client.types import QueryParameter
 from dotenv import load_dotenv
 from multiprocessing import Pool, cpu_count
 import yaml
+import requests
+import sqlite3
+
+from bundle_simulation import (
+    greedy_bundle_selection,
+    simulate_bundles,
+    store_simulation_results,
+    simulate_optimal_bundle_combinations,
+    calculate_refund,
+    detect_violation,
+    has_sufficient_balance
+)
+
+from state_management import (
+    initialize_web3, 
+    simulate_transaction_bundle, 
+    update_block_state, 
+    verify_transaction_inclusion, 
+    simulate_backruns_and_update_state
+)
+from db.database_initializer import initialize_or_verify_database, load_config
+from db.db_utils import connect_to_database
+
+# Initialize the database tables before any further operations
+initialize_or_verify_database()
+
+# Use BASE_DIR to handle paths dynamically for different environments
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 # Load environment variables
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+dotenv_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path, override=True)
 
 # Load additional config if needed
-config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
     config = yaml.safe_load(file)
 
@@ -25,17 +53,19 @@ with open(config_path, 'r') as file:
 data_dir = config['data_storage']['data_directory']
 logs_dir = config['data_storage']['logs_directory']
 log_filename = config['data_storage']['log_filename']
+simulation_results_dir = config['data_storage']['simulation_output_directory']
 
 # Ensure data and logs directories exist
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(logs_dir, exist_ok=True)
+os.makedirs(simulation_results_dir, exist_ok=True)
 
 # Load SQL queries from files
-backrun_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_backruns.sql')
+backrun_query_path = os.path.join(BASE_DIR, 'queries', 'fetch_backruns.sql')
 with open(backrun_query_path, 'r') as file:
     local_backrun_query_sql = file.read()
 
-fetch_remaining_transactions_query_path = os.path.join(os.path.dirname(__file__), '..', 'queries', 'fetch_remaining_transactions.sql')
+fetch_remaining_transactions_query_path = os.path.join(BASE_DIR, 'queries', 'fetch_remaining_transactions.sql')
 with open(fetch_remaining_transactions_query_path, 'r') as file:
     local_non_mev_query_sql = file.read()
 
@@ -45,8 +75,11 @@ dune_api_key = os.getenv('DUNE_API_KEY')
 web3 = Web3(Web3.HTTPProvider(rpc_node_url))
 dune_client = DuneClient(api_key=dune_api_key)
 
-# Load query ID's
+# Load query ID
 all_mev_blocker_bundle_per_block = config['all_mev_blocker_bundle_per_block']  # Updated to use config.yaml
+
+# List to keep track of retried blocks
+retried_blocks = []
 
 def convert_to_dict(obj):
     """Convert AttributeDict or bytes objects into serializable dictionaries."""
@@ -63,10 +96,40 @@ def convert_to_dict(obj):
         return str(obj)  # Fallback to string representation if any error occurs
 
 def fetch_block_contents(block_number):
-    """Fetch the contents of a block given its number."""
-    block = web3.eth.get_block(block_number, full_transactions=True)
-    log(f"Fetched block {block_number} with {len(block['transactions'])} transactions.")
-    return block
+    """Fetch the contents of a block given its number, with optional retry logic for rate-limiting."""
+    retries = config['rate_limit_handling']['max_retries']
+    delay = config['rate_limit_handling']['initial_delay_seconds']
+    exponential_backoff = config['rate_limit_handling']['exponential_backoff']
+    enable_retry = config['rate_limit_handling'].get('enable_retry', True)  # Default to True if not set
+
+    for attempt in range(retries if enable_retry else 1):  # No retries if retry is disabled
+        try:
+            # Fetch the block data
+            block = web3.eth.get_block(block_number, full_transactions=True)
+
+
+            return block
+        except requests.exceptions.HTTPError as err:
+            if err.response.status_code == 429:  # Too Many Requests
+                if enable_retry:
+                    log(f"Rate limit exceeded for block {block_number}, retrying after {delay} seconds... (Attempt {attempt+1}/{retries})")
+                    time.sleep(delay)
+                    if exponential_backoff:
+                        delay *= 2  # Exponential backoff if enabled
+                    # Add the block number to the retried blocks list
+                    if block_number not in retried_blocks:  # Avoid duplicates
+                        retried_blocks.append(block_number)
+                        log(f"Added block {block_number} to retried blocks list.")  # Log as soon as added
+                        log(f"Current retried blocks: {', '.join(map(str, retried_blocks))}")  # Dynamic list logging
+                else:
+                    log(f"Rate limit exceeded for block {block_number}. Skipping retries.")
+                    break
+            else:
+                log(f"Failed to process block {block_number}: {err}")
+                raise
+    log(f"Exceeded retry limit for block {block_number}.")
+    return None
+
 
 def log_discrepancy_and_abort(message):
     """Log an error message and abort the script."""
@@ -107,13 +170,25 @@ def compare_and_validate_sql(query_id, local_sql):
     return False
 
 def execute_query_and_get_results(query_id, start_block=None, end_block=None):
-    """Execute the query on Dune and get the results."""
+    """
+    Execute the query on Dune and get results while limiting to end_block.
+    """
+    start_block = start_block if start_block is not None else config.get('start_block')
+    end_block = end_block if end_block is not None else config.get('end_block')
+
+    # Ensure start_block does not exceed end_block
+    if start_block > end_block:
+        log("Error: start block exceeds end block. Exiting.")
+        return []
+
     try:
         # Create query parameters
         parameters = [
             QueryParameter.number_type(name="start_block", value=start_block),
             QueryParameter.number_type(name="end_block", value=end_block)
         ]
+
+        log(f"Executing query with start block {start_block} and end block {end_block}.")
 
         # Construct the query object
         query = QueryBase(query_id=query_id, params=parameters)
@@ -153,66 +228,290 @@ def execute_query_and_get_results(query_id, start_block=None, end_block=None):
         return []
 
 def get_latest_processed_block():
-    """Get the latest processed block from the data directory."""
-    files = [f for f in os.listdir(data_dir) if f.startswith("block_") and f.endswith(".json")]
-    if not files:
-        log("No processed blocks found, starting from default block range.")
-        return None
-    latest_file = max(files, key=lambda f: int(f.split('_')[1].split('.')[0]))
-    latest_block = int(latest_file.split('_')[1].split('.')[0])
-    return latest_block
+    """Get the latest processed block while respecting configured start_block if no previous blocks exist."""
+    conn = connect_to_database()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT MAX(block_number) FROM block_data")
+        latest_processed_block = cursor.fetchone()[0]
+        if latest_processed_block is None:
+            log("No processed blocks found in the database, using configured start block.")
+            return config.get('start_block')
+        return latest_processed_block
+    except sqlite3.Error as e:
+        log_error(f"Error querying the latest processed block: {e}")
+        return config.get('start_block')
+    finally:
+        conn.close()
+
+
+def get_simulated_blocks():
+    """
+    Check the simulation results directory to find blocks that have already been simulated.
+    :return: A list of block numbers that have already been simulated
+    """
+    simulated_files = [f for f in os.listdir(simulation_results_dir) if f.endswith('.json')]
+    simulated_blocks = [int(f.split('_')[1].split('.')[0]) for f in simulated_files]
+    return simulated_blocks
+
+def load_existing_block_and_bundles(block_number):
+    """
+    Load the block and bundles from the data folder.
+    :param block_number: The block number to load
+    :return: Block data and bundles data
+    """
+    block_file = os.path.join(data_dir, f"block_{block_number}.json")
+    bundles_file = os.path.join(data_dir, f"bundles_{block_number}.json")
+
+    with open(block_file, 'r') as block_f:
+        block_data = json.load(block_f)
+
+    with open(bundles_file, 'r') as bundles_f:
+        bundles_data = json.load(bundles_f)
+
+    return block_data, bundles_data
+
+def simulate_unprocessed_blocks():
+    """
+    Simulate only unprocessed blocks within the start and end block range.
+    Deprecated func
+    """
+    start_block = config.get('start_block')
+    end_block = config.get('end_block')
+
+    all_blocks = [
+        int(f.split('_')[1].split('.')[0]) 
+        for f in os.listdir(data_dir) 
+        if f.startswith('block_') and start_block <= int(f.split('_')[1].split('.')[0]) <= end_block
+    ]
+
+    unprocessed_blocks = [block for block in all_blocks if block not in get_simulated_blocks()]
+    unprocessed_blocks.sort()  # Process in ascending order
+
+    if not unprocessed_blocks:
+        log("No new blocks to simulate within the specified range.")
+        return
+
+    for block_number in unprocessed_blocks:
+        if block_number > end_block:
+            log(f"Reached end block limit {end_block}. Stopping further processing.")
+            break  # Exit if beyond the end_block
+
+        log(f"Processing block {block_number}...")
+
+        try:
+            block_data, bundles_data = load_existing_block_and_bundles(block_number)
+
+            if bundles_data:
+                max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+                selected_bundles = greedy_bundle_selection(bundles_data, max_selected_bundles)
+
+                # Simulate the selected bundles
+                log(f"Simulating bundles for block {block_number}...")
+                simulation_results = simulate_bundles(selected_bundles, web3, block_number)
+
+                # Store the simulation results
+                simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+                log(f"Storing the simulation results for block {block_number}...")
+                store_simulation_results(simulation_results, simulation_output_file)
+
+        except Exception as e:
+            log(f"Error while processing block {block_number}: {e}")
+
 
 def get_mev_blocker_bundles():
-    """Prepare and execute Dune Analytics query to get MEV Blocker bundles."""
-    # Compare and validate the SQL
+    """
+    Execute Dune Analytics query to get MEV Blocker bundles for the configured block range.
+    """
     if not compare_and_validate_sql(all_mev_blocker_bundle_per_block, local_backrun_query_sql):
         return None
 
-    # Get the latest block number from the blockchain
-    latest_block_number = web3.eth.block_number
-    block_delay_seconds = config.get('block_delay_seconds', 10)
-
-    # Determine start_block and end_block
+    # Prioritize configuration-defined block range
     start_block = config.get('start_block')
-    if start_block is None or start_block <= 0:
-        latest_processed_block = get_latest_processed_block()
-        start_block = latest_processed_block if latest_processed_block else latest_block_number - 100
-
     end_block = config.get('end_block')
-    if end_block is None or end_block <= 0:
-        end_block = latest_block_number - int(block_delay_seconds // 12)
 
-    log(f"Start block: {start_block}, End block: {end_block}")
+    # Ensure only the configured range is used
+    if start_block is None or end_block is None:
+        log("Error: start_block or end_block not defined in configuration.")
+        return []
 
-    # Execute the query and get results
+    log(f"Using configured start block: {start_block}, end block: {end_block}")
+
     return execute_query_and_get_results(all_mev_blocker_bundle_per_block, start_block, end_block)
 
 def store_data(block, bundles):
-    """Store the block and bundles data into the data directory."""
-    # Convert block to dictionary
-    block_dict = convert_to_dict(block)
+    """
+    Store the block and bundles data into the data directory after converting all transactions to dictionary format.
+    """
+    block_number = block['number']
+    
+    # Load configuration to get the database path
+    config = load_config()
+    
+    try:
+        # Establish a connection to the SQLite database
+        conn = connect_to_database()
+        cursor = conn.cursor()
+                # Print out the entire database for debugging purposes
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        log(f"Database Tables: {tables}")
 
-    with open(os.path.join(data_dir, f"block_{block['number']}.json"), 'w') as f:
-        json.dump(block_dict, f, indent=4)
+        # Convert block to dictionary for JSON storage
+        block_dict = convert_to_dict(block)
 
-    with open(os.path.join(data_dir, f"bundles_{block['number']}.json"), 'w') as f:
-        json.dump(bundles, f, indent=4)
+        # Ensure that each transaction within bundles is a properly parsed JSON dictionary
+        for bundle in bundles:
+            if isinstance(bundle['transactions'], str):
+                try:
+                    bundle['transactions'] = json.loads(bundle['transactions'])
+                except json.JSONDecodeError as e:
+                    log(f"Error decoding transactions for bundle: {bundle}. Error: {e}")
+                    continue  # Skip this bundle if parsing fails
 
-    log(f"Stored data for block {block['number']}")
+        # Save block data to JSON file
+        block_file_path = os.path.join(config['data_storage']['data_directory'], f"block_{block_number}.json")
+        with open(block_file_path, 'w') as block_f:
+            json.dump(block_dict, block_f, indent=4)
+
+        # Save bundles data to JSON file
+        bundles_file_path = os.path.join(config['data_storage']['data_directory'], f"bundles_{block_number}.json")
+        with open(bundles_file_path, 'w') as bundles_f:
+            json.dump(bundles, bundles_f, indent=4)
+
+        log(f"Stored data for block {block_number}")
+
+        # Update the tracking database for the block data
+        cursor.execute("INSERT OR REPLACE INTO block_data (block_number, transaction_count) VALUES (?, ?)",
+                       (block_number, len(block['transactions'])))
+        conn.commit()
+
+        # Print out the entire database for debugging purposes
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        log(f"Database Tables: {tables}")
+
+        for table_name, in tables:
+            cursor.execute(f"SELECT * FROM {table_name};")
+            rows = cursor.fetchall()
+            log(f"Table: {table_name}, Rows: {rows}")
+
+    except sqlite3.Error as e:
+        log_error(f"Error storing data for block {block_number} into the database: {e}")
+
+    except Exception as e:
+        log_error(f"Unexpected error in store_data function for block {block_number}: {e}")
+
+    finally:
+        # Ensure the connection is closed
+        conn.close()
+
 
 def process_block(block_number, bundles):
-    """Process a single block: fetch, identify bundles, and store data."""
+    """
+    Process a single block: fetch, simulate, validate, and store data.
+    """
     try:
-        block = fetch_block_contents(block_number)
-        # Here we use the bundles fetched previously
-        store_data(block, bundles)
+        # Load block data and extract block_time
+        block_data, bundles_data = load_existing_block_and_bundles(block_number)
+        block_time = block_data['timestamp']  # Extract block timestamp
+        
+        log(f"Processing block {block_number}...")
+        
+        # Simulate bundles and store results
+        simulation_results = simulate_bundles(bundles, web3, block_number, block_time)
+        simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+        store_simulation_results(simulation_results, simulation_output_file)
+
+        # Verify transaction inclusion
+        for bundle in bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+                else:
+                    log_error(f"Missing transaction hash in block {block_number}")
+
     except Exception as e:
-        log(f"Failed to process block {block_number}: {e}")
+        log_error(f"Error while processing block {block_number}: {e}")
+        
+# Function for further centralization
+def determine_and_simulate(web3, block_number, transaction_hash):
+    """
+    Determine the position of a transaction within the block and simulate subsequent bundles.
+    :param web3: Web3 instance connected to the RPC node
+    :param block_number: Block number to process
+    :param transaction_hash: Hash of the target transaction
+    """
+    try:
+        # Fetch block data with all transactions
+        block = web3.eth.get_block(block_number, full_transactions=True)
+        transaction_position = None
+        
+        # Determine the transaction position within the block
+        for index, tx in enumerate(block.transactions):
+            if tx.hash == transaction_hash:
+                transaction_position = index
+                break
+
+        if transaction_position is None:
+            log(f"Transaction {transaction_hash} not found in block {block_number}.")
+            return
+
+        log(f"Transaction position determined: {transaction_position} in block {block_number}.")
+
+        # Track all bundles related to the transaction broadcasted within the first 10 seconds prior to the block time
+        bundles = get_mev_blocker_bundles()
+        if not bundles:
+            log("No MEV Blocker bundles found for simulation.")
+            return
+
+        # Apply greedy algorithm to select the best bundles for simulation
+        max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+        selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
+
+        # Simulate selected bundles
+        log(f"Simulating selected bundles for block {block_number}...")
+        block_time = block.get('timestamp')
+        simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
+
+        # Store the simulation results
+        simulation_output_directory = config['data_storage']['simulation_output_directory']
+        simulation_output_file = os.path.join(simulation_output_directory, f"simulation_{block_number}.json")
+        store_simulation_results(simulation_results, simulation_output_file)
+        log(f"Stored simulation results for block {block_number}.")
+
+        # Perform backrun simulations and update the state for each selected bundle
+        for bundle in selected_bundles:
+            transactions = bundle.get('transactions', [])
+            if transactions:
+                simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
+
+        # Verify inclusion of transactions in the block
+        log("Verifying inclusion of all simulated transactions in their respective blocks...")
+        for bundle in selected_bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+
+        # Detect potential violations by comparing optimal vs actual bundle combinations
+        log("Detecting any potential violations of the MEV Blocker refund rules...")
+        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
+        actual_refund = calculate_refund(simulation_results)
+        detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
+
+    except Exception as e:
+        log_error(f"Error during determine_and_simulate for block {block_number}: {e}")
+
 
 if __name__ == "__main__":
-    # Initialize logging with the log file from config.yaml
-    log_path = os.path.join(logs_dir, log_filename)
-    setup_logging(log_path)
+    # Initialize logging
+    setup_logging()
 
     log("Starting data gathering process...")
 
@@ -229,21 +528,145 @@ if __name__ == "__main__":
         else:
             log("No bundles retrieved. Proceeding to the next query...")
 
-    # Determine the number of blocks to process
+    # Determine the number of blocks to process, respecting the end_block
     latest_block_number = web3.eth.block_number
-    latest_processed_block = get_latest_processed_block() or latest_block_number - config.get('start_block_offset', 100)
+    start_block = config.get('start_block')
+    end_block = config.get('end_block')
+    latest_processed_block = get_latest_processed_block() or start_block
 
-    # Check if `num_blocks_to_process` is set to "all"
+    # Apply the end_block as an upper boundary
+    if latest_processed_block > end_block:
+        log(f"Latest processed block {latest_processed_block} exceeds the specified end block {end_block}.")
+        exit(1)
+
+    # Generate block numbers up to end_block
     num_blocks_to_process = config.get('num_blocks_to_process', 5)
     if num_blocks_to_process == "all":
-        # Gather all blocks from the latest processed block to the latest block on the blockchain
-        block_numbers = list(range(latest_processed_block, latest_block_number + 1))
+        # Gather all blocks from latest_processed_block up to end_block
+        block_numbers = list(range(latest_processed_block, end_block + 1))
     else:
-        # Gather a specified number of blocks (e.g., 5)
-        block_numbers = [latest_processed_block - i for i in range(num_blocks_to_process)]
+        # Gather the specified number of blocks, ensuring we do not exceed end_block
+        block_numbers = [
+            block for block in range(latest_processed_block, latest_processed_block + num_blocks_to_process)
+            if block <= end_block
+        ]
 
-    # Use multiprocessing to handle multiple blocks concurrently
-    with Pool(processes=cpu_count()) as pool:
-        pool.starmap(process_block, [(block_number, bundles) for block_number in block_numbers])
+    # Store block data and bundles before further processing
+    log("Fetching and storing block data and bundles...")
+    for block_number in block_numbers:
+        if block_number > end_block:
+            log(f"Reached end block limit {end_block}. Stopping further processing.")
+            break  # Stop if we reach beyond end_block
 
-    log("All blocks processed.")
+        try:
+            block_data = web3.eth.get_block(block_number, full_transactions=True)
+            log(f"Fetched block data for block {block_number} with {len(block_data['transactions'])} transactions.")
+
+            # Filter or associate bundles to the specific block
+            relevant_bundles = [bundle for bundle in bundles if bundle['block_number'] == block_number]
+
+            # Store block data and relevant bundles immediately after fetching
+            store_data(block_data, relevant_bundles)
+            log(f"Stored block data and associated bundles for block {block_number}.")
+
+        except Exception as e:
+            log_error(f"Error fetching or storing block data for block {block_number}: {e}")
+            continue
+
+    # Greedy algorithm to select the best bundles
+    max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
+    log(f"Selecting the best {max_selected_bundles} bundles using the greedy algorithm...")
+
+    # Since bundles might have been filtered earlier, update selected bundles
+    selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
+
+    # Check if simulation is enabled
+    simulation_enabled = config['bundle_simulation']['simulation_enabled']
+    if simulation_enabled:
+        log("Simulating the selected bundles...")
+
+        for block_number in block_numbers:
+            try:
+                # Ensure block data is available
+                block_data = web3.eth.get_block(block_number, full_transactions=True)
+                block_time = block_data.get('timestamp')  # Correctly fetch block time
+                
+                # Simulate the selected bundles for the block
+                simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
+
+                # Store the simulation results
+                simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
+                log(f"Storing the simulation results to {simulation_output_file}...")
+                store_simulation_results(simulation_results, simulation_output_file)
+
+            except Exception as e:
+                log_error(f"Error simulating bundles for block {block_number}: {e}")
+                continue
+
+    # Perform backrun simulations and update state for each selected bundle
+    for block_number in block_numbers:
+        for bundle in selected_bundles:
+            transactions = bundle.get('transactions', [])
+            simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
+
+    # Verify the inclusion of transactions in the block
+    log("Verifying inclusion of all simulated transactions in their respective blocks...")
+    for block_number in block_numbers:
+        for bundle in selected_bundles:
+            for tx in bundle['transactions']:
+                tx_hash = tx.get('hash')
+                if tx_hash:
+                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
+                    if not included:
+                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
+
+    conn = connect_to_database()
+    cursor = conn.cursor()
+
+    # Detect potential violations by comparing optimal vs actual bundle combinations
+    log("Detecting any potential violations of the MEV Blocker refund rules...")
+
+    for block_number in block_numbers:
+        # Check if the block has already been processed for violations
+        cursor.execute("SELECT is_simulated FROM block_data WHERE block_number=?", (block_number,))
+        block_status = cursor.fetchone()
+        if block_status and block_status[0]:
+            log(f"[INFO] Block {block_number} has already been processed for violations. Skipping...")
+            continue
+
+        # Perform simulation of the optimal bundle combinations for this block
+        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
+
+        # Filter out bundles that have already been simulated for the current block
+        selected_bundles_to_simulate = []
+        for bundle in selected_bundles:
+            bundle_id = bundle.get('id', 'unknown')
+            # Check if the bundle has already been simulated for the current block
+            cursor.execute("SELECT status FROM processed_bundles WHERE bundle_id=? AND block_number=?", (bundle_id, block_number))
+            bundle_status = cursor.fetchone()
+            if not bundle_status or bundle_status[0] != 'simulated':
+                if all(isinstance(tx, dict) for tx in bundle['transactions']):
+                    selected_bundles_to_simulate.append(bundle)
+                else:
+                    log(f"[ERROR] Bundle {bundle_id} contains transactions that are not properly formatted as dictionaries. Skipping.")
+
+        # If we have any bundles that need simulation, run the simulation and store the result
+        if selected_bundles_to_simulate:
+            # `simulate_bundles()` will skip transactions and bundles that have been processed, so it's safe to call with all bundles
+            simulation_results = simulate_bundles(selected_bundles_to_simulate, web3, block_number, block_time)
+            actual_refund = calculate_refund(simulation_results)
+        else:
+            log(f"[INFO] No new bundles to simulate for block {block_number}. Skipping simulation step.")
+            actual_refund = 0  # Default value in case no new bundles are simulated
+
+        # After simulation, detect potential violations if both optimal and actual exist
+        if optimal_combination:
+            detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
+
+        # Mark block as fully processed if all tasks are completed
+        cursor.execute(
+            "UPDATE block_data SET is_simulated = ? WHERE block_number = ?",
+            (True, block_number)
+        )
+        conn.commit()
+        log(f"[INFO] Block {block_number} marked as fully processed in block_data.")
