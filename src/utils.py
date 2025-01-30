@@ -11,6 +11,8 @@ except ImportError:
 
 # Base directory for consistent path handling
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+os.chdir(BASE_DIR)
+sys.path.insert(0, BASE_DIR)
 
 # Load configuration from the config file
 def load_config():
@@ -31,7 +33,7 @@ def setup_logging():
     log_path = os.path.join(logs_dir, log_filename)
 
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)  # Set global log level
+    logger.setLevel(logging.DEBUG)  # Set global log level
 
     # Clear existing handlers to prevent duplicates
     if logger.hasHandlers():
@@ -46,14 +48,14 @@ def setup_logging():
 
     # File Handler - logs to a file
     file_handler = logging.FileHandler(log_path, mode='a')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
     # Console Handler - logs to console with optional color
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
 
     # Check if ColoredFormatter is available, if not, use standard Formatter
     if ColoredFormatter:

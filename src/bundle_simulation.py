@@ -1,4 +1,5 @@
 import os
+import sys
 import yaml
 import json
 import itertools
@@ -17,6 +18,8 @@ initialize_or_verify_database()
 
 # Base directory for consistent path handling
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+os.chdir(BASE_DIR)
+sys.path.insert(0, BASE_DIR)
 
 config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:

@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 from utils import setup_logging, log, log_error
@@ -39,6 +40,8 @@ initialize_or_verify_database()
 
 # Use BASE_DIR to handle paths dynamically for different environments
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+os.chdir(BASE_DIR)
+sys.path.insert(0, BASE_DIR)
 
 # Load environment variables
 dotenv_path = os.path.join(BASE_DIR, '.env')
