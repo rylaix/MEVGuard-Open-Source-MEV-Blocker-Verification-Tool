@@ -1,6 +1,6 @@
 # MEVGuard - Open Source MEV Blocker Verification Tool
 
-This project is an open-source tool designed to verify MEV Blocker transactions, maximize user refunds, and flag rule violations. The project is structured around three main milestones, and this document provides detailed instructions for setting up and running the data gathering process (Milestone 1).
+This project is an open-source tool designed to verify MEV Blocker transactions, maximize user refunds, and flag rule violations. The project is structured around three main milestones, and this document provides detailed instructions for setting up and running the data gathering process.
 
 ## Table of Contents
 
@@ -25,9 +25,9 @@ The objective of this project is to develop a standalone service that confirms t
 - **Python**: The main programming language used for the project. (Python 3.10.10 used)
 - **web3.py**: A Python library to interact with the Ethereum blockchain.
 - **Dune Analytics**: Used to query and analyze blockchain data.
-- **Docker**: Containerization for easy deployment (to be implemented in future milestones).
-- **Telegram & Slack**: Used for alerts and logging (to be implemented in future milestones).
-- **C Extensions**: Used for optimizing mathematical computations. (basically a placeholder at this stage, included for future development)
+- **Docker**: Containerization for easy deployment
+- **Telegram & Slack**: Used for alerts and logging
+- ~~**C Extensions**: Used for optimizing mathematical computations.~~ **DEPRECATED**.
 - **Multiprocessing**: Utilized to leverage CPU cores for parallel data processing.
 
 ## Setup and Installation
@@ -120,8 +120,13 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 │
 ├── src/
 │   ├── __init__.py                         # Identification of folder so python can see it
-│   ├── data_gathering.py                   # Script for data gathering
+│   ├── data_gathering.py                   # Script for data gathering and MAIN.
+│   ├── bundle_simulation.py                # Helper file for a proper trace_callMany simulations
+│   ├── state_management.py                 # Helper file with states tracking inside our DB
 │   └── utils.py                            # Utility functions (logging, etc.)
+│      └── db/
+│          ├── database_initializer.py      # Script for DB initialization.
+│          └── db_utils.pt                  # Script for a CRUD.
 │
 ├── c_extension/                            # Directory for C extension code
 │   ├── c_extension.c                       # C extension for optimized calculations
@@ -134,6 +139,7 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 │
 ├── queries/                                # Directory with all queries used
 │   ├── fetch_backruns.sql                  # Fetch Mevblocker backruns
+│   ├── mevguard_tracking.sql               # A layout for our tracking SQLite DB
 │   └── fetch_remaining_transactions.sql    # Fetch data outside of MEV
 │
 ├── config/
@@ -152,7 +158,7 @@ MEVGuard-Open-Source-MEV-Blocker-Verification-Tool/
 - **Virtual Environment Issues**: Ensure the virtual environment is activated before installing dependencies or running scripts.
 - **API Key Errors**: Double-check that your API keys in the `.env` file are correct.
 - **Network Errors**: Ensure you have a stable internet connection and valid RPC node URL.
-- **C Extension Compilation**: Ensure you have the necessary build tools installed for compiling C extensions.
+- ~~**C Extension Compilation**: Ensure you have the necessary build tools installed for compiling C extensions.~~
 
 ## Devcontainer Setup
 
