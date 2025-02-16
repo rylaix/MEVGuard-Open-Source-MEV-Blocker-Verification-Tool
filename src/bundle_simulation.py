@@ -1,5 +1,4 @@
 import os
-import sys
 import yaml
 import json
 import itertools
@@ -18,8 +17,6 @@ initialize_or_verify_database()
 
 # Base directory for consistent path handling
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-os.chdir(BASE_DIR)
-sys.path.insert(0, BASE_DIR)
 
 config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
@@ -112,6 +109,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
             # Mark all transactions in this bundle as skipped due to insufficient balance
             for tx in transactions:
                 tx_hash = tx.get('hash', 'unknown')
+                log(f"tx_hash bundle_simulation1 simulate bundles1 is {tx_hash}")
                 cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
                                (tx_hash, bundle_id, block_number, "insufficient_balance"))
             conn.commit()
@@ -119,6 +117,7 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
 
         for tx in transactions:
             tx_hash = tx.get('hash')
+            log(f"tx_hash bundle_simulation2 simulate bundles2 is {tx_hash}")
             if not tx_hash:
                 log(f"[WARNING] Skipping transaction due to missing hash: {tx}")
                 continue
@@ -265,8 +264,6 @@ def simulate_bundles(selected_bundles, web3, block_number, block_time, bundle_da
     log(f"[INFO] Finished simulating bundles for block {block_number}")
     conn.close()
     return simulation_results
-
-
 
 
 def calculate_refund(simulation_result):

@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import sqlite3
 import yaml
@@ -13,8 +12,6 @@ import threading
 
 # Base directory for consistent path handling
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-os.chdir(BASE_DIR)
-sys.path.insert(0, BASE_DIR)
 
 config_path = os.path.join(BASE_DIR, 'config', 'config.yaml')
 with open(config_path, 'r') as file:
@@ -51,34 +48,29 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
     """
     Simulate the transactions in the given bundle using trace_callMany via raw RPC call.
     Includes retry logic for 429 errors and rate-limiting control.
-
     Parameters:
     - web3: Web3 instance
     - transactions: List of transactions with full details (from, to, gas, etc.)
     - block_number: The block number in which the transaction is included
     - block_time: Timestamp of the block for identifying bundles within the correct time window
     """
+    trace_calls = []
+
+    # Establish SQLite connection for tracking
     conn = connect_to_database()
     cursor = conn.cursor()
+    
+    tx_hash_map = []
 
-    trace_calls = []
-    transaction_metadata = []
-
+    # Construct trace_call objects for each transaction in the bundle
     for tx in transactions:
+        tx_hash = tx.get('hash')
+        tx_hash_map.append((tx_hash))
         if not isinstance(tx, dict):
             log(f"Skipping invalid transaction format: {tx}. Expected dictionary, got {type(tx)}.")
             continue
 
-        if not has_sufficient_balance({'transactions': [tx]}, web3):
-            log(f"[INFO] Transaction {tx.get('hash', 'unknown')} has insufficient balance.")
-            cursor.execute(
-                "INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
-                (tx.get('hash', 'unknown'), tx.get('bundle_id', 'unknown'), block_number, "insufficient_balance")
-            )
-            conn.commit()
-            continue
-
-        original_hash = tx.get('hash')
+        log(f"Processing transaction {tx.get('hash', 'unknown')} for simulation.")
         trace_call_object = {
             'from': tx['from'],
             'to': tx.get('to', None),
@@ -93,66 +85,59 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
             'accessList': tx.get('access_list', None)
         }
 
-        transaction_metadata.append({
-            'original_hash': original_hash,
-            'bundle_id': tx.get('bundle_id', 'unknown')
-        })
         trace_calls.append((trace_call_object, ["stateDiff"]))
 
-    log(f"trace_calls structure: {trace_calls}")
+    log(f"Constructed trace_calls structure: {trace_calls}")
 
+    # If no valid trace calls were constructed, abort simulation
     if not trace_calls:
         log("No valid trace calls were constructed. Aborting simulation.")
-        conn.close()
         return None
 
+    # Execute simulation with retries
     for attempt in range(retries):
         try:
             time.sleep(call_interval)
             response = web3.provider.make_request("trace_callMany", [trace_calls])
 
+            # Handle errors in the RPC response
             if response.get('error'):
                 log(f"Error in trace_callMany: {response['error']}")
-                conn.close()
                 return None
 
-            enriched_results = []
             results = response.get('result', [])
-            for idx, result in enumerate(results):
-                metadata = transaction_metadata[idx]
-                tx_block_number = None
-                try:
-                    if metadata['original_hash']:
-                        tx = web3.eth.get_transaction(metadata['original_hash'])
-                        tx_block_number = tx.get('blockNumber')
-                except Exception as e:
-                    log_error(f"Could not retrieve block number for transaction {metadata['original_hash']}: {e}")
+            log(f"RESULT WAS {results}")
+            for result in results:
+                tx_hash = tx_hash_map
+                tx_data = web3.eth.get_transaction(tx_hash)
+                log(f"tx_data state_management simulate_transaction_bundle1 is {tx_data}")
+                            
+                result['blockNumber'] = tx_data.get('blockNumber')
+                log(f"[INFO] Retrieved blockNumber {result['blockNumber']} for transaction {tx_hash}.")
 
-                enriched_result = result.copy()
-                enriched_result.update({
-                    'transactionHash': metadata['original_hash'],
-                    'blockNumber': tx_block_number or block_number,
-                    'bundleId': metadata['bundle_id']
-                })
-                enriched_results.append(enriched_result)
+            # Record successful simulation results in the database
+            for tx in transactions:
+                tx_hash = tx.get('hash')
+                log(f"tx_hash state_management simulate_transaction_bundle1 is {tx_hash}")
+                if tx_hash:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
+                        (tx_hash, tx.get('bundle_id', 'unknown'), block_number, "simulated")
+                    )
+                    conn.commit()
 
-                cursor.execute(
-                    "INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status) VALUES (?, ?, ?, ?)",
-                    (metadata['original_hash'], metadata['bundle_id'], tx_block_number or block_number, "simulated")
-                )
-                conn.commit()
+            # Update state and mark bundles as processed
+            update_block_state(web3, response.get('result'))
 
-            update_block_state(web3, enriched_results)
-
-            for metadata in transaction_metadata:
+            for tx in transactions:
+                bundle_id = tx.get('bundle_id', 'unknown')
                 cursor.execute(
                     "INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, processed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                    (metadata['bundle_id'], block_number, "success")
+                    (bundle_id, block_number, "success")
                 )
                 conn.commit()
 
-            conn.close()
-            return enriched_results
+            return response.get('result')
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
@@ -162,14 +147,14 @@ def simulate_transaction_bundle(web3, transactions, block_number, block_time, re
                 raise e
         except Exception as e:
             log_error(f"Unexpected error during transaction bundle simulation: {e}")
-            conn.close()
-            return None
+
+    conn.close()
+    return None
+
 
 def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, backoff_factor=2):
     """
-    Dedicated function to simulate a backrun transaction.
-    This is separate from the main simulation to ensure accuracy.
-
+    Dedicated function to simulate a backrun transaction. This is separate from the main simulation to ensure accuracy.
     :param web3: Web3 instance
     :param tx: Transaction dictionary
     :param block_number: The block number in which the transaction is included
@@ -180,23 +165,11 @@ def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, 
     if not isinstance(tx, dict):
         log(f"Skipping invalid transaction format: {tx}. Expected dictionary, got {type(tx)}.")
         return None
-
     if 'from' not in tx:
         log(f"Skipping transaction due to missing 'from' field: {tx}.")
         return None
 
-    if not has_sufficient_balance({'transactions': [tx]}, web3):
-        log(f"[INFO] Transaction {tx.get('hash', 'unknown')} has insufficient balance.")
-        conn = connect_to_database()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status, is_backrun) VALUES (?, ?, ?, ?, ?)",
-                       (tx.get('hash', 'unknown'), tx.get('bundle_id', 'unknown'), block_number, "insufficient_balance", True))
-        conn.commit()
-        conn.close()
-        return None
-
-    log(f"Adding transaction {tx.get('hash', 'unknown')} to trace_calls structure with details: {tx}")
-
+    log(f"Preparing trace call for backrun transaction {tx.get('hash', 'unknown')}.")
     trace_call_object = {
         'from': tx['from'],
         'to': tx.get('to', None),
@@ -213,10 +186,7 @@ def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, 
 
     trace_calls.append((trace_call_object, ["stateDiff"]))
 
-    log(f"trace_calls structure for backrun: {trace_calls}")
-
-    original_hash = tx.get('hash')
-
+    # Retry logic for backrun simulation
     for attempt in range(retries):
         try:
             time.sleep(call_interval)
@@ -227,29 +197,19 @@ def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, 
                 return None
 
             transaction_results = response.get('result', [])
-            if not transaction_results:
-                log("[ERROR] Empty results from trace_callMany (backrun). Aborting.")
-                return None
-
-            # Enrich results with original transaction hash and block number
-            enriched_results = []
             for result in transaction_results:
-                tx_block_number = None
-                try:
-                    if original_hash:
-                        tx = web3.eth.get_transaction(original_hash)
-                        tx_block_number = tx.get('blockNumber')
-                except Exception as e:
-                    log_error(f"Could not retrieve block number for transaction {original_hash}: {e}")
+                tx_hash = result.get('transactionHash')
+                if tx_hash:
+                    try:
+                        tx_data = web3.eth.get_transaction(tx_hash)
+                        log(f"tx_data state_management2 simulate)backrun_transaction1 is {tx_data}")
+                        result['blockNumber'] = tx_data.get('blockNumber')
+                        log(f"[INFO] Retrieved blockNumber {result['blockNumber']} for backrun transaction {tx_hash}.")
+                    except Exception as e:
+                        log(f"[ERROR] Failed to retrieve blockNumber for backrun transaction {tx_hash}: {e}")
+                        result['blockNumber'] = None
 
-                enriched_result = result.copy()
-                enriched_result.update({
-                    'transactionHash': original_hash,
-                    'blockNumber': tx_block_number or block_number
-                })
-                enriched_results.append(enriched_result)
-
-            return enriched_results
+            return transaction_results
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
@@ -269,46 +229,56 @@ def simulate_backrun_transaction(web3, tx, block_number, block_time, retries=3, 
 def simulate_backruns_and_update_state(web3, transactions, block_number, block_time):
     """
     Simulate all possible backruns at position p+1 and update the state accordingly.
-
     :param web3: Web3 instance
     :param transactions: List of transactions from the bundle
     :param block_number: The block number in which the transaction is included
     :param block_time: Timestamp of the block
     """
     log(f"Simulating backruns for block {block_number} at timestamp {block_time}...")
+
+    # Establish SQLite connection
     conn = connect_to_database()
     cursor = conn.cursor()
 
     for tx in transactions:
+        # Ensure that the transaction is in dictionary format
         if not isinstance(tx, dict):
             log_error(f"Invalid transaction format: {tx}. Expected dictionary, got {type(tx)}.")
             continue
 
+        # Use the helper function to check balance sufficiency
         if not has_sufficient_balance({'transactions': [tx]}, web3):
             log(f"[INFO] Transaction {tx.get('hash', 'unknown')} has insufficient balance.")
+            # Insert transaction record with status 'insufficient_balance' and mark as backrun
             cursor.execute("INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status, is_backrun, processed_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                            (tx.get('hash', 'unknown'), tx.get('bundle_id', 'unknown'), block_number, "insufficient_balance", True))
             conn.commit()
             continue
 
         try:
+            # Log the simulation process for debugging
             log(f"Simulating backrun for transaction {tx['hash']} at position p+1")
-            backrun_result = simulate_backrun_transaction(web3, tx, block_number, block_time)
 
+            # Perform the simulation for the backrun using the dedicated backrun function
+            backrun_result = simulate_backrun_transaction(web3, tx, block_number, block_time)
+            
+            # Verify if backrun simulation yielded valid results
             if not backrun_result:
                 log_error(f"[ERROR] Backrun simulation returned empty results for transaction {tx['hash']}. Skipping.")
                 continue
 
+            # Update state management with backrun result
             for result in backrun_result:
-                tx_hash = result.get('transactionHash')
+                tx_hash = tx.get('hash')
                 block_number_result = result.get('blockNumber')
-
+                
                 if not tx_hash or not block_number_result:
                     log_error(f"[ERROR] Transaction hash or block number missing in backrun result: {result}. Skipping this transaction.")
                     continue
-
-                update_block_state(web3, [result])
-
+                
+                update_block_state(web3, result)
+                
+                # Update processed transactions table
                 try:
                     cursor.execute(
                         "INSERT OR REPLACE INTO processed_transactions (tx_hash, bundle_id, block_number, status, is_backrun, processed_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
@@ -323,6 +293,7 @@ def simulate_backruns_and_update_state(web3, transactions, block_number, block_t
         except Exception as e:
             log_error(f"Error during backrun simulation for transaction {tx['hash']}: {e}")
 
+    # Mark block as simulated in block_data
     try:
         cursor.execute(
             "UPDATE block_data SET is_simulated = ? WHERE block_number = ?",
@@ -353,19 +324,25 @@ def update_block_state(web3, transaction_results):
     
     for result in transaction_results:
         tx_hash = result.get('transactionHash')
-        block_number = result.get('blockNumber')
-        state_diff = result.get('stateDiff', {})
+        try:
+            tx_data = web3.eth.get_transaction(tx_hash)
+            result['blockNumber'] = tx_data.get('blockNumber')
+            log(f"[INFO] Retrieved blockNumber {result['blockNumber']} for transaction {tx_hash}.")
+        except Exception as e:
+            log(f"[ERROR] Failed to retrieve blockNumber for transaction {tx_hash}: {e}")
+            result['blockNumber'] = None
 
-        if not tx_hash or not block_number:
-            log_error(f"[ERROR] Transaction hash or block number missing in transaction result: {result}")
+        if not result.get('blockNumber'):
+            log_error(f"[ERROR] Missing blockNumber for transaction {tx_hash}. Skipping.")
             continue
 
+        state_diff = result.get('stateDiff', {})
+
         if state_diff:
-            # Store state_diff in the processed_bundles table if needed for future state analysis
             cursor.execute("INSERT OR REPLACE INTO processed_bundles (bundle_id, block_number, status, violation_detected, processed_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                            (tx_hash, block_number, "success", False))
+                            (tx_hash, result['blockNumber'], "success", False))
             conn.commit()
-            log(f"[INFO] Updated state for transaction {tx_hash} in block {block_number}. StateDiff stored in database.")
+            log(f"[INFO] Updated state for transaction {tx_hash} in block {result['blockNumber']}.")
         else:
             log(f"[WARNING] No stateDiff available for transaction {tx_hash}. Skipping state update.")
 

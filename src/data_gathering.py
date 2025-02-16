@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import time
 from utils import setup_logging, log, log_error
@@ -40,8 +39,6 @@ initialize_or_verify_database()
 
 # Use BASE_DIR to handle paths dynamically for different environments
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-os.chdir(BASE_DIR)
-sys.path.insert(0, BASE_DIR)
 
 # Load environment variables
 dotenv_path = os.path.join(BASE_DIR, '.env')
@@ -274,54 +271,6 @@ def load_existing_block_and_bundles(block_number):
 
     return block_data, bundles_data
 
-def simulate_unprocessed_blocks():
-    """
-    Simulate only unprocessed blocks within the start and end block range.
-    Deprecated func
-    """
-    start_block = config.get('start_block')
-    end_block = config.get('end_block')
-
-    all_blocks = [
-        int(f.split('_')[1].split('.')[0]) 
-        for f in os.listdir(data_dir) 
-        if f.startswith('block_') and start_block <= int(f.split('_')[1].split('.')[0]) <= end_block
-    ]
-
-    unprocessed_blocks = [block for block in all_blocks if block not in get_simulated_blocks()]
-    unprocessed_blocks.sort()  # Process in ascending order
-
-    if not unprocessed_blocks:
-        log("No new blocks to simulate within the specified range.")
-        return
-
-    for block_number in unprocessed_blocks:
-        if block_number > end_block:
-            log(f"Reached end block limit {end_block}. Stopping further processing.")
-            break  # Exit if beyond the end_block
-
-        log(f"Processing block {block_number}...")
-
-        try:
-            block_data, bundles_data = load_existing_block_and_bundles(block_number)
-
-            if bundles_data:
-                max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
-                selected_bundles = greedy_bundle_selection(bundles_data, max_selected_bundles)
-
-                # Simulate the selected bundles
-                log(f"Simulating bundles for block {block_number}...")
-                simulation_results = simulate_bundles(selected_bundles, web3, block_number)
-
-                # Store the simulation results
-                simulation_output_file = os.path.join(simulation_results_dir, f"simulation_{block_number}.json")
-                log(f"Storing the simulation results for block {block_number}...")
-                store_simulation_results(simulation_results, simulation_output_file)
-
-        except Exception as e:
-            log(f"Error while processing block {block_number}: {e}")
-
-
 def get_mev_blocker_bundles():
     """
     Execute Dune Analytics query to get MEV Blocker bundles for the configured block range.
@@ -440,77 +389,6 @@ def process_block(block_number, bundles):
     except Exception as e:
         log_error(f"Error while processing block {block_number}: {e}")
         
-# Function for further centralization
-def determine_and_simulate(web3, block_number, transaction_hash):
-    """
-    Determine the position of a transaction within the block and simulate subsequent bundles.
-    :param web3: Web3 instance connected to the RPC node
-    :param block_number: Block number to process
-    :param transaction_hash: Hash of the target transaction
-    """
-    try:
-        # Fetch block data with all transactions
-        block = web3.eth.get_block(block_number, full_transactions=True)
-        transaction_position = None
-        
-        # Determine the transaction position within the block
-        for index, tx in enumerate(block.transactions):
-            if tx.hash == transaction_hash:
-                transaction_position = index
-                break
-
-        if transaction_position is None:
-            log(f"Transaction {transaction_hash} not found in block {block_number}.")
-            return
-
-        log(f"Transaction position determined: {transaction_position} in block {block_number}.")
-
-        # Track all bundles related to the transaction broadcasted within the first 10 seconds prior to the block time
-        bundles = get_mev_blocker_bundles()
-        if not bundles:
-            log("No MEV Blocker bundles found for simulation.")
-            return
-
-        # Apply greedy algorithm to select the best bundles for simulation
-        max_selected_bundles = config['bundle_simulation']['max_selected_bundles']
-        selected_bundles = greedy_bundle_selection(bundles, max_selected_bundles)
-
-        # Simulate selected bundles
-        log(f"Simulating selected bundles for block {block_number}...")
-        block_time = block.get('timestamp')
-        simulation_results = simulate_bundles(selected_bundles, web3, block_number, block_time)
-
-        # Store the simulation results
-        simulation_output_directory = config['data_storage']['simulation_output_directory']
-        simulation_output_file = os.path.join(simulation_output_directory, f"simulation_{block_number}.json")
-        store_simulation_results(simulation_results, simulation_output_file)
-        log(f"Stored simulation results for block {block_number}.")
-
-        # Perform backrun simulations and update the state for each selected bundle
-        for bundle in selected_bundles:
-            transactions = bundle.get('transactions', [])
-            if transactions:
-                simulate_backruns_and_update_state(web3, transactions, block_number, block_time)
-
-        # Verify inclusion of transactions in the block
-        log("Verifying inclusion of all simulated transactions in their respective blocks...")
-        for bundle in selected_bundles:
-            for tx in bundle['transactions']:
-                tx_hash = tx.get('hash')
-                if tx_hash:
-                    included = verify_transaction_inclusion(web3, block_number, tx_hash)
-                    if not included:
-                        log_error(f"Transaction {tx_hash} not included in block {block_number}")
-
-        # Detect potential violations by comparing optimal vs actual bundle combinations
-        log("Detecting any potential violations of the MEV Blocker refund rules...")
-        optimal_combination, highest_refund = simulate_optimal_bundle_combinations(bundles, web3, block_number)
-        actual_refund = calculate_refund(simulation_results)
-        detect_violation(optimal_combination, selected_bundles, highest_refund, actual_refund)
-
-    except Exception as e:
-        log_error(f"Error during determine_and_simulate for block {block_number}: {e}")
-
 
 if __name__ == "__main__":
     # Initialize logging
