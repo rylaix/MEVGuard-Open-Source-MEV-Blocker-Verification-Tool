@@ -1,0 +1,38 @@
+{
+    "name": "MEVGuard Development Environment",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-azuretools.vscode-docker",
+                "ms-vscode.cpptools",
+                "redhat.vscode-yaml"
+            ],
+            "settings": {
+                "terminal.integrated.shell.linux": "/bin/bash",
+                "python.pythonPath": "/usr/local/bin/python"
+            }
+        }
+    },
+    "forwardPorts": [8545],
+    "postCreateCommand": "sudo chown -R vscode:vscode /workspace && pip install -r requirements.txt && python /workspace/.devcontainer/venv.py",
+    "remoteUser": "vscode",
+    "mounts": [
+        "source=${localWorkspaceFolder}/logs,target=/workspace/logs,type=bind",
+        "source=${localWorkspaceFolder}/config,target=/workspace/config,type=bind",
+        "source=${localWorkspaceFolder}/data,target=/workspace/data,type=bind",
+        "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind"  // Mount local SSH keys
+    ],
+    "remoteEnv": {
+        "DUNE_API_KEY": "${localEnv:DUNE_API_KEY}",
+        "RPC_NODE_URL": "${localEnv:RPC_NODE_URL}",
+        "SSH_AUTH_SOCK": "/tmp/ssh_agent.sock" // Forward SSH agent socket
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/git:1": {} // Add Git support
+    }
+}
